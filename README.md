@@ -17,6 +17,7 @@
 - Token Types：支持在“标准（LSP 23）”与“语言扩展（contributes.semanticTokenTypes）”两层间切换编辑
 - 字体配置：可为所选语言配置 `editor.fontFamily`（以 VS Code language override 写入；按 scope+主题存储）
 - 语义开关：支持编辑 `editor.semanticHighlighting.enabled`、`<language>.semanticHighlighting.enabled`、以及 `[language].editor.semanticHighlighting.enabled`（三态：继承/开/关）
+- 高级：支持输入自定义 selector；可切换为 TextMate scopes 模式写入 `editor.tokenColorCustomizations`（适用于 Inspect 面板里显示的 textmate scopes）
 - 会话安全：未保存时关闭面板会自动回滚本次会话对 settings/字体/语义开关的临时更改（下次启动也会尝试自动回滚未完成会话）
 
 ## 注意

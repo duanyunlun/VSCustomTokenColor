@@ -11,6 +11,7 @@ import {
   getLanguagePreset,
   initSync,
   loadPresets,
+  PresetsByTheme,
   PresetScope,
   savePresets,
   upsertLanguagePreset
@@ -24,10 +25,18 @@ import {
   setSemanticTokenCustomizationsRollbackPending,
   takeSemanticTokenColorCustomizationsSnapshot
 } from './settingsApplier';
+import {
+  applyTextMateRulesToSettingsSilently,
+  isTokenColorCustomizationsRollbackPending,
+  restoreTokenColorCustomizationsSnapshotSilently,
+  setTokenColorCustomizationsRollbackPending,
+  takeTokenColorCustomizationsSnapshot
+} from './tokenColorApplier';
 import { getPreviewFileExtensionForLanguageId } from './previewSnippets';
 import { parseVsCodeSemanticTokenRuleValue } from './semanticTokenCustomizations';
 import { LSP_STANDARD_TOKEN_MODIFIERS, LSP_STANDARD_TOKEN_TYPES } from './tokenDiscovery';
 import { discoverSemanticTokenLanguageBindings, LanguageBinding } from './languageDiscovery';
+import { parseVsCodeTextMateRuleSettings } from './textMateCustomizations';
 
 type WebviewLanguageItem = {
   key: string;
@@ -38,6 +47,8 @@ type WebviewLanguageItem = {
 type EditableLayer = 'standard' | 'language';
 
 type TriState = 'inherit' | 'on' | 'off';
+
+type CustomSelectorType = 'semantic' | 'textmate';
 
 type WebviewState = {
   themeName: string;
@@ -52,6 +63,9 @@ type WebviewState = {
   selectedTokenType?: string;
   selectedModifiers: string[];
   selector?: string;
+  useCustomSelector: boolean;
+  customSelectorType: CustomSelectorType;
+  customSelectorText: string;
   fontFamily: string;
   layerStyle?: TokenStyle;
   effectiveStyle?: TokenStyle;
@@ -157,6 +171,27 @@ async function tryAutoRollbackOnActivate(context: vscode.ExtensionContext, outpu
     output.appendLine(`[startup] 工作区级回滚失败：${msg}`);
   }
 
+  try {
+    if (isTokenColorCustomizationsRollbackPending(context, 'global')) {
+      output.appendLine('[startup] 检测到用户级未保存的 TextMate 配色更改，正在自动回滚…');
+      await restoreTokenColorCustomizationsSnapshotSilently(context, 'global');
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? (e.message || String(e)) : String(e);
+    output.appendLine(`[startup] 用户级 TextMate 回滚失败：${msg}`);
+  }
+
+  try {
+    const hasWorkspace = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+    if (hasWorkspace && isTokenColorCustomizationsRollbackPending(context, 'workspace')) {
+      output.appendLine('[startup] 检测到工作区级未保存的 TextMate 配色更改，正在自动回滚…');
+      await restoreTokenColorCustomizationsSnapshotSilently(context, 'workspace');
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? (e.message || String(e)) : String(e);
+    output.appendLine(`[startup] 工作区级 TextMate 回滚失败：${msg}`);
+  }
+
   for (const scope of ['user', 'workspace'] as const) {
     try {
       const hasWorkspace = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
@@ -221,13 +256,17 @@ export function activate(context: vscode.ExtensionContext): void {
       let presetsByTheme = loadPresets(context, scope);
       let selectedTokenType: string | undefined;
       let selectedModifiers: string[] = [];
+      let useCustomSelector = false;
+      let customSelectorType: CustomSelectorType = 'semantic';
+      let customSelectorText = '';
 
-      let savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, fontFamily: '' };
+      let savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
       let draftStandardPreset = clonePreset(savedStandardPreset);
 
       // 当前语言的“已保存预设”与“编辑草稿”
       let savedPreset = getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? {
         tokenRules: {},
+        textMateRules: {},
         fontFamily: ''
       };
       let draftPreset = clonePreset(savedPreset);
@@ -250,12 +289,14 @@ export function activate(context: vscode.ExtensionContext): void {
         if (sessionSnapshotTaken) {
           const target = scope === 'user' ? 'global' : 'workspace';
           await restoreSemanticTokenCustomizationsSnapshotSilently(context, target);
+          await restoreTokenColorCustomizationsSnapshotSilently(context, target);
           const misc = preMiscSnapshot ?? loadMiscSnapshot(context, scope);
           if (misc) {
             await restoreMiscSnapshot(misc);
           }
           await clearMiscRollbackPending(context, scope);
           await setSemanticTokenCustomizationsRollbackPending(context, target, false);
+          await setTokenColorCustomizationsRollbackPending(context, target, false);
         }
       };
 
@@ -305,13 +346,25 @@ export function activate(context: vscode.ExtensionContext): void {
         selectedTokenType = nextSelectedTokenType;
 
         selectedModifiers = selectedModifiers.filter((m) => tokenModifiers.includes(m));
-        const selector = selectedTokenType ? [selectedTokenType, ...selectedModifiers].join('.') : undefined;
+        const selectorBase = selectedTokenType ? [selectedTokenType, ...selectedModifiers].join('.') : undefined;
+        const customRaw = customSelectorText.trim();
+        const selector =
+          useCustomSelector && customRaw
+            ? (customSelectorType === 'textmate' ? (customRaw.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean)[0] ?? customRaw) : customRaw)
+            : selectorBase;
 
-        const activeRules = layer === 'standard' ? draftStandardPreset.tokenRules : draftPreset.tokenRules;
-        const layerStyle = selector ? activeRules[selector] : undefined;
+        const activeSemanticRules = layer === 'standard' ? draftStandardPreset.tokenRules : draftPreset.tokenRules;
+        const activeTextMateRules = layer === 'standard' ? draftStandardPreset.textMateRules : draftPreset.textMateRules;
+        const activeRules =
+          useCustomSelector && customSelectorType === 'textmate' ? (activeTextMateRules ?? {}) : activeSemanticRules;
+        const layerStyle = selector ? (activeRules as TokenStyleRules)[selector] : undefined;
 
         const effective = selector
-          ? getEffectiveStyleFromSettings(themeName, selector)
+          ? (
+              useCustomSelector && customSelectorType === 'textmate'
+                ? getEffectiveTextMateStyleFromSettings(themeName, selector)
+                : getEffectiveStyleFromSettings(themeName, selector)
+            )
           : { hasRule: false as const, style: undefined, source: undefined };
         const effectiveStyle = effective.style;
         const effectiveStyleSource: WebviewState['effectiveStyleSource'] =
@@ -322,7 +375,9 @@ export function activate(context: vscode.ExtensionContext): void {
               : 'theme';
 
         const overrideWarning =
-          layer === 'standard' && selector ? buildOverrideWarning(presetsByTheme, themeName, selector, uiLanguage) : undefined;
+          (!useCustomSelector || customSelectorType !== 'textmate') && layer === 'standard' && selector
+            ? buildOverrideWarning(presetsByTheme, themeName, selector, uiLanguage)
+            : undefined;
 
         const semanticHighlightingEnabled = getSemanticHighlightingEnabled();
         const languageSemanticHighlighting = getLanguageSemanticHighlightingSetting(selectedLanguage.languageId, scope);
@@ -340,12 +395,19 @@ export function activate(context: vscode.ExtensionContext): void {
           selectedTokenType,
           selectedModifiers,
           selector,
+          useCustomSelector,
+          customSelectorType,
+          customSelectorText,
           fontFamily: draftPreset.fontFamily ?? '',
           layerStyle,
           effectiveStyle,
           effectiveStyleSource,
           overrideWarning,
-          tokenHelp: selector ? buildTokenHelpText(selectedLanguage, layer, selector) : undefined,
+          tokenHelp: selector
+            ? (useCustomSelector && customSelectorType === 'textmate'
+                ? buildTextMateHelpText(selector, uiLanguage)
+                : buildTokenHelpText(selectedLanguage, layer, selector))
+            : undefined,
           semanticHighlightingEnabled,
           languageSemanticHighlighting,
           editorSemanticHighlightingOverride,
@@ -364,6 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         const target = scope === 'user' ? 'global' : 'workspace';
         await takeSemanticTokenColorCustomizationsSnapshot(context, target);
+        await takeTokenColorCustomizationsSnapshot(context, target);
         preEditFontFamily = await getLanguageFontFamily(selectedLanguage.languageId, scope);
 
         const editorSemanticGlobal = getEditorSemanticHighlightingSetting(scope);
@@ -394,6 +457,13 @@ export function activate(context: vscode.ExtensionContext): void {
             draftPreset.tokenRules,
             draftStandardPreset.tokenRules
           );
+          const unionTextMateRules = buildUnionTextMateRules(
+            presetsByTheme,
+            themeName,
+            selectedLanguage.key,
+            draftPreset.textMateRules ?? {},
+            draftStandardPreset.textMateRules ?? {}
+          );
           const target = scope === 'user' ? 'global' : 'workspace';
 
           const selector = selectedTokenType ? [selectedTokenType, ...selectedModifiers].join('.') : undefined;
@@ -403,6 +473,7 @@ export function activate(context: vscode.ExtensionContext): void {
           );
 
           await applyRulesToSettingsSilently(context, unionRules, themeName, target);
+          await applyTextMateRulesToSettingsSilently(context, unionTextMateRules, themeName, target);
 
           // 字体：仅对当前语言做临时应用（不影响其它语言）
           await applyLanguageFontFamily(selectedLanguage.languageId, draftPreset.fontFamily, scope);
@@ -462,12 +533,14 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         const target = scope === 'user' ? 'global' : 'workspace';
         await restoreSemanticTokenCustomizationsSnapshotSilently(context, target);
+        await restoreTokenColorCustomizationsSnapshotSilently(context, target);
         const misc = preMiscSnapshot ?? loadMiscSnapshot(context, scope);
         if (misc) {
           await restoreMiscSnapshot(misc);
         }
         await clearMiscRollbackPending(context, scope);
         await setSemanticTokenCustomizationsRollbackPending(context, target, false);
+        await setTokenColorCustomizationsRollbackPending(context, target, false);
         sessionSnapshotTaken = false;
         preEditFontFamily = undefined;
         preMiscSnapshot = undefined;
@@ -476,7 +549,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const applyAllPresetsToSettings = async (): Promise<void> => {
         try {
           presetsByTheme = loadPresets(context, scope);
-          savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, fontFamily: '' };
+          savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
           const unionRules = buildUnionRules(
             presetsByTheme,
             themeName,
@@ -485,9 +558,17 @@ export function activate(context: vscode.ExtensionContext): void {
             {},
             savedStandardPreset.tokenRules
           );
+          const unionTextMateRules = buildUnionTextMateRules(
+            presetsByTheme,
+            themeName,
+            '',
+            {},
+            (savedStandardPreset.textMateRules ?? {}) as TokenStyleRules
+          );
           const target = scope === 'user' ? 'global' : 'workspace';
           output.appendLine(`[applyAll] target=${target} theme=${toThemeKey(themeName)} rules=${Object.keys(unionRules).length}`);
           await applyRulesToSettingsSilently(context, unionRules, themeName, target);
+          await applyTextMateRulesToSettingsSilently(context, unionTextMateRules, themeName, target);
 
           const themePresets = presetsByTheme[themeName] ?? {};
           const bindings = getLanguageBindings();
@@ -509,9 +590,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const restoreToSaved = async (): Promise<void> => {
         presetsByTheme = loadPresets(context, scope);
-        savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, fontFamily: '' };
+        savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
         draftStandardPreset = clonePreset(savedStandardPreset);
-        savedPreset = getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, fontFamily: '' };
+        savedPreset = getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
         draftPreset = clonePreset(savedPreset);
         dirty = false;
         await rollbackSessionIfNeeded();
@@ -523,10 +604,12 @@ export function activate(context: vscode.ExtensionContext): void {
         presetsByTheme = loadPresets(context, scope);
 
         presetsByTheme = upsertLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY, {
-          tokenRules: { ...draftStandardPreset.tokenRules }
+          tokenRules: { ...draftStandardPreset.tokenRules },
+          textMateRules: { ...(draftStandardPreset.textMateRules ?? {}) }
         });
         presetsByTheme = upsertLanguagePreset(presetsByTheme, themeName, selectedLanguage.key, {
           tokenRules: { ...draftPreset.tokenRules },
+          textMateRules: { ...(draftPreset.textMateRules ?? {}) },
           fontFamily: draftPreset.fontFamily ?? ''
         });
         await savePresets(context, scope, presetsByTheme);
@@ -540,6 +623,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await clearMiscRollbackPending(context, scope);
         const target = scope === 'user' ? 'global' : 'workspace';
         await setSemanticTokenCustomizationsRollbackPending(context, target, false);
+        await setTokenColorCustomizationsRollbackPending(context, target, false);
         await postState();
       };
 
@@ -593,9 +677,9 @@ export function activate(context: vscode.ExtensionContext): void {
             scope = nextScope;
             presetsByTheme = loadPresets(context, scope);
             savedStandardPreset =
-              getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, fontFamily: '' };
+              getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
             savedPreset =
-              getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, fontFamily: '' };
+              getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
 
             if (!wasDirty) {
               draftStandardPreset = clonePreset(savedStandardPreset);
@@ -671,9 +755,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
           selectedLanguage = next;
           presetsByTheme = loadPresets(context, scope);
-          savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, fontFamily: '' };
+          savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
           draftStandardPreset = clonePreset(savedStandardPreset);
-          savedPreset = getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, fontFamily: '' };
+          savedPreset = getLanguagePreset(presetsByTheme, themeName, selectedLanguage.key) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
           draftPreset = clonePreset(savedPreset);
           dirty = false;
           selectedTokenType = undefined;
@@ -707,6 +791,34 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
+        if (msg.type === 'setCustomSelectorEnabled') {
+          const payload = msg.payload as { enabled?: unknown };
+          useCustomSelector = payload.enabled === true;
+          dirty = true;
+          scheduleApplyPreview();
+          await postState();
+          return;
+        }
+
+        if (msg.type === 'setCustomSelectorType') {
+          const payload = msg.payload as { selectorType?: unknown };
+          const t = payload.selectorType;
+          customSelectorType = t === 'textmate' ? 'textmate' : 'semantic';
+          dirty = true;
+          scheduleApplyPreview();
+          await postState();
+          return;
+        }
+
+        if (msg.type === 'setCustomSelectorText') {
+          const payload = msg.payload as { text?: unknown };
+          customSelectorText = typeof payload.text === 'string' ? payload.text : '';
+          dirty = true;
+          scheduleApplyPreview();
+          await postState();
+          return;
+        }
+
         if (msg.type === 'setFontFamily') {
           const payload = msg.payload as { fontFamily?: unknown };
           const fontFamily = typeof payload.fontFamily === 'string' ? payload.fontFamily : '';
@@ -724,21 +836,62 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           const selector = payload.selector.trim();
           const style = sanitizeTokenStyle(payload.style);
-          const nextRules = layer === 'standard' ? { ...draftStandardPreset.tokenRules } : { ...draftPreset.tokenRules };
+
+          const targetPreset: any = layer === 'standard' ? draftStandardPreset : draftPreset;
+          const ruleKey = useCustomSelector && customSelectorText.trim() ? customSelectorText.trim() : selector;
+          const isTextMate = useCustomSelector && customSelectorType === 'textmate';
+          const currentRules: TokenStyleRules = isTextMate
+            ? { ...(targetPreset.textMateRules ?? {}) }
+            : { ...(targetPreset.tokenRules ?? {}) };
+
           if (style) {
-            nextRules[selector] = style;
+            // 支持把一个输入拆成多个 TextMate scopes（逗号/换行分隔）
+            if (isTextMate) {
+              const parts = ruleKey.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean);
+              if (parts.length <= 1) {
+                currentRules[ruleKey] = style;
+              } else {
+                for (const p of parts) {
+                  currentRules[p] = style;
+                }
+              }
+            } else {
+              currentRules[ruleKey] = style;
+            }
           } else {
-            delete nextRules[selector];
+            if (isTextMate) {
+              const parts = ruleKey.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean);
+              if (parts.length <= 1) {
+                delete currentRules[ruleKey];
+              } else {
+                for (const p of parts) {
+                  delete currentRules[p];
+                }
+              }
+            } else {
+              delete currentRules[ruleKey];
+            }
           }
-          if (layer === 'standard') {
-            draftStandardPreset = { ...draftStandardPreset, tokenRules: nextRules };
+
+          if (isTextMate) {
+            if (layer === 'standard') {
+              draftStandardPreset = { ...(draftStandardPreset as any), textMateRules: currentRules };
+            } else {
+              draftPreset = { ...(draftPreset as any), textMateRules: currentRules };
+            }
           } else {
-            draftPreset = { ...draftPreset, tokenRules: nextRules };
+            if (layer === 'standard') {
+              draftStandardPreset = { ...draftStandardPreset, tokenRules: currentRules };
+            } else {
+              draftPreset = { ...draftPreset, tokenRules: currentRules };
+            }
           }
           dirty = true;
-          const parts = selector.split('.').map((x) => x.trim()).filter(Boolean);
-          selectedTokenType = parts[0] ?? selectedTokenType;
-          selectedModifiers = parts.slice(1);
+          if (!useCustomSelector) {
+            const parts = selector.split('.').map((x) => x.trim()).filter(Boolean);
+            selectedTokenType = parts[0] ?? selectedTokenType;
+            selectedModifiers = parts.slice(1);
+          }
           scheduleApplyPreview();
           await postState();
           return;
@@ -1000,8 +1153,65 @@ function getRuleFromCustomizationsValueDetailed(
   return { source: undefined, style: undefined };
 }
 
+function getEffectiveTextMateStyleFromSettings(
+  themeName: string,
+  scope: string
+): { hasRule: boolean; style?: TokenStyle; source?: 'themeRules' | 'globalRules' } {
+  const editorConfig = vscode.workspace.getConfiguration('editor');
+  const value = editorConfig.get<unknown>('tokenColorCustomizations');
+  const hit = getTextMateRuleFromCustomizationsValueDetailed(value, themeName, scope);
+  if (!hit.source) {
+    return { hasRule: false as const, style: undefined, source: undefined };
+  }
+  return { hasRule: true as const, style: hit.style, source: hit.source };
+}
+
+function getTextMateRuleFromCustomizationsValueDetailed(
+  value: unknown,
+  themeName: string,
+  scope: string
+): { source?: 'themeRules' | 'globalRules'; style?: TokenStyle } {
+  const obj = asPlainObject(value);
+
+  const globalRules = Array.isArray((obj as any).textMateRules) ? ((obj as any).textMateRules as any[]) : [];
+  const themeObj = asPlainObject(obj[toThemeKey(themeName)]);
+  const themeRules = Array.isArray((themeObj as any).textMateRules) ? ((themeObj as any).textMateRules as any[]) : [];
+
+  // 优先级：主题 textMateRules 覆盖顶层 textMateRules
+  const themeHit = findTextMateRuleStyle(themeRules, scope);
+  if (themeHit) {
+    return { source: 'themeRules', style: themeHit };
+  }
+  const globalHit = findTextMateRuleStyle(globalRules, scope);
+  if (globalHit) {
+    return { source: 'globalRules', style: globalHit };
+  }
+  return { source: undefined, style: undefined };
+}
+
+function findTextMateRuleStyle(rules: any[], scope: string): TokenStyle | undefined {
+  const target = (scope || '').trim();
+  if (!target) return undefined;
+  for (const r of rules) {
+    if (!r || typeof r !== 'object') continue;
+    const scopeValue = (r as any).scope as unknown;
+    const settings = (r as any).settings as unknown;
+    const scopes: string[] = [];
+    if (typeof scopeValue === 'string' && scopeValue.trim()) {
+      scopes.push(scopeValue.trim());
+    } else if (Array.isArray(scopeValue)) {
+      for (const s of scopeValue) {
+        if (typeof s === 'string' && s.trim()) scopes.push(s.trim());
+      }
+    }
+    if (!scopes.includes(target)) continue;
+    return parseVsCodeTextMateRuleSettings(settings);
+  }
+  return undefined;
+}
+
 function buildOverrideWarning(
-  presetsByTheme: Record<string, Record<string, { tokenRules: TokenStyleRules }>>,
+  presetsByTheme: PresetsByTheme,
   themeName: string,
   selector: string,
   uiLanguage: 'zh-cn' | 'en'
@@ -1043,6 +1253,17 @@ function buildTokenHelpText(language: LanguageBinding, layer: EditableLayer, sel
     return tokenTypeDesc;
   }
   return uiLanguage === 'zh-cn' ? '暂无说明' : 'No description';
+}
+
+function buildTextMateHelpText(scope: string, uiLanguage: 'zh-cn' | 'en'): string {
+  const s = (scope || '').trim();
+  if (!s) {
+    return uiLanguage === 'zh-cn' ? '未设置 TextMate scope' : 'No TextMate scope';
+  }
+  if (uiLanguage === 'zh-cn') {
+    return `TextMate scope：${s}\n提示：该模式写入 editor.tokenColorCustomizations（主题块 textMateRules），用于处理 Inspect 面板里显示的 textmate scopes（如 entity.name.function.definition.cpp）。`;
+  }
+  return `TextMate scope: ${s}\nNote: this writes to editor.tokenColorCustomizations (theme textMateRules), for scopes shown in Inspect (e.g. entity.name.function.definition.cpp).`;
 }
 
 function getUiLanguage(): 'zh-cn' | 'en' {
@@ -1252,7 +1473,7 @@ function formatTokenStyle(style: TokenStyle | undefined): string {
 }
 
 function buildUnionRules(
-  presetsByTheme: Record<string, Record<string, { tokenRules: TokenStyleRules }>>,
+  presetsByTheme: PresetsByTheme,
   themeName: string,
   activeLanguageKey: string,
   activeDraftRules: TokenStyleRules,
@@ -1279,6 +1500,34 @@ function buildUnionRules(
   return output;
 }
 
+function buildUnionTextMateRules(
+  presetsByTheme: PresetsByTheme,
+  themeName: string,
+  activeLanguageKey: string,
+  activeDraftRules: TokenStyleRules,
+  standardRulesOverride?: TokenStyleRules
+): TokenStyleRules {
+  const theme = presetsByTheme[themeName] ?? {};
+  const output: TokenStyleRules = {};
+
+  const standardPreset = theme[STANDARD_PRESET_KEY];
+  Object.assign(output, standardRulesOverride ?? standardPreset?.textMateRules ?? {});
+
+  // 先合并所有已保存预设
+  for (const [langKey, preset] of Object.entries(theme)) {
+    if (langKey === STANDARD_PRESET_KEY) continue;
+    if (!preset) continue;
+    Object.assign(output, preset.textMateRules ?? {});
+  }
+
+  // 再覆盖当前语言草稿（未保存也能预览）
+  if (activeLanguageKey) {
+    Object.assign(output, activeDraftRules);
+  }
+
+  return output;
+}
+
 // 已改为“编辑前快照回滚”，不再使用该函数。
 
 async function ensurePreviewFile(languageId: string): Promise<vscode.Uri> {
@@ -1289,9 +1538,10 @@ async function ensurePreviewFile(languageId: string): Promise<vscode.Uri> {
   return vscode.Uri.parse(`${TOKEN_STYLER_PREVIEW_SCHEME}:/preview.${ext}?lang=${q}`);
 }
 
-function clonePreset(preset: { tokenRules: TokenStyleRules; fontFamily?: string }): { tokenRules: TokenStyleRules; fontFamily?: string } {
+function clonePreset(preset: { tokenRules: TokenStyleRules; textMateRules?: TokenStyleRules; fontFamily?: string }): { tokenRules: TokenStyleRules; textMateRules: TokenStyleRules; fontFamily?: string } {
   return {
     tokenRules: { ...(preset.tokenRules ?? {}) },
+    textMateRules: { ...(preset.textMateRules ?? {}) },
     fontFamily: preset.fontFamily ?? ''
   };
 }
@@ -1497,6 +1747,26 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
           </div>
           <div class="muted" style="margin-top:6px; line-height:1.4" id="modifierInfo"></div>
 
+          <div class="divider"></div>
+
+          <div class="field">
+            <div>高级</div>
+            <div class="inline">
+              <label><input id="useCustomSelector" type="checkbox" /> 使用自定义 selector</label>
+              <select id="customSelectorType" title="selector 类型">
+                <option value="semantic">语义（semanticTokenColorCustomizations）</option>
+                <option value="textmate">TextMate scopes（tokenColorCustomizations）</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <div>selector</div>
+            <div class="inline">
+              <input id="customSelector" type="text" placeholder="例如：function.definition 或 entity.name.function.definition.cpp" style="width:100%" />
+            </div>
+          </div>
+          <div class="muted" style="margin-top:6px; line-height:1.4" id="customSelectorHint"></div>
+
           <div class="field">
             <div>字体</div>
             <div class="inline">
@@ -1526,7 +1796,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
               当前语义高亮已关闭（editor.semanticHighlighting.enabled=false），语义 Token 配色不会生效。
               <button id="btnEnableSemantic" style="margin-left:6px">启用</button>
             </div>
-            说明：可在“标准（LSP）”与“语言扩展”两层分别编辑。修改会立即作用到右侧预览（通过临时写入 settings 实现）。未点击“保存”则切换语言/关闭面板会自动恢复。注意：语义 token 配色是“按主题的全局规则”，语言层的同名 tokenType 会覆盖标准层，但仍会影响所有语言（VS Code 原生限制）。
+            说明：可在“标准（LSP）”与“语言扩展”两层分别编辑。修改会立即作用到右侧预览（通过临时写入 settings 实现）。未点击“保存”则切换语言/关闭面板会自动恢复。注意：语义 token 配色是“按主题的全局规则”，语言层的同名 tokenType 会覆盖标准层，但仍会影响所有语言（VS Code 原生限制）。如某些高亮来自 TextMate scopes，可在“高级”中切换到 TextMate 并粘贴 scope 进行设置。
           </div>
         </div>
       </div>
@@ -1568,6 +1838,10 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
       const semanticAvailabilityHintEl = document.getElementById('semanticAvailabilityHint');
       const modifierListEl = document.getElementById('modifierList');
       const modifierInfoEl = document.getElementById('modifierInfo');
+      const useCustomSelectorEl = document.getElementById('useCustomSelector');
+      const customSelectorTypeEl = document.getElementById('customSelectorType');
+      const customSelectorEl = document.getElementById('customSelector');
+      const customSelectorHintEl = document.getElementById('customSelectorHint');
       const fontFamilyEl = document.getElementById('fontFamily');
       const fgColor = document.getElementById('fgColor');
       const fgText = document.getElementById('fgText');
@@ -1727,11 +2001,11 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
           if (state.uiLanguage === 'zh-cn') {
             semanticAvailabilityHintEl.textContent =
               '提示：当前语言可能没有提供语义 Token（或数据为空），所以 editor.semanticTokenColorCustomizations 不一定会生效。这通常不是本扩展问题，而是语言服务能力/实现所致。' +
-              ' 如需给该语言配色，可能需要使用 editor.tokenColorCustomizations（TextMate scopes）。';
+              ' 如需给该语言配色，可能需要使用 editor.tokenColorCustomizations（TextMate scopes）。你可以在“高级”里选择 TextMate 并粘贴 scope（例如 Inspect 里看到的 entity.name.function.definition.cpp）。';
           } else {
             semanticAvailabilityHintEl.textContent =
               'Note: this language may not provide semantic tokens (or returns empty data), so editor.semanticTokenColorCustomizations may not take effect. This is usually due to the language service. ' +
-              ' You may need editor.tokenColorCustomizations (TextMate scopes) for coloring.';
+              ' You may need editor.tokenColorCustomizations (TextMate scopes) for coloring. You can use Advanced → TextMate and paste a scope (e.g. entity.name.function.definition.cpp from Inspect).';
           }
         } else {
           semanticAvailabilityHintEl.style.display = 'none';
@@ -1747,7 +2021,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         }
 
         fontFamilyEl.value = state.fontFamily || '';
-        selectedTokenEl.textContent = state.selectedTokenType ? state.selectedTokenType : '';
+        selectedTokenEl.textContent = state.useCustomSelector ? (state.selector || '') : (state.selectedTokenType ? state.selectedTokenType : '');
         tokenHelpEl.textContent = state.tokenHelp || '';
         overrideWarningEl.textContent = state.overrideWarning || '';
         overrideWarningEl.style.display = state.overrideWarning ? 'block' : 'none';
@@ -1759,6 +2033,28 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
 
         // 标题右侧 tokenType 按“生效色”着色（无显式值则沿用默认前景色）
         selectedTokenEl.style.color = effectiveStyle && effectiveStyle.foreground ? effectiveStyle.foreground : '';
+
+        useCustomSelectorEl.checked = !!state.useCustomSelector;
+        customSelectorTypeEl.value = state.customSelectorType || 'semantic';
+        customSelectorEl.value = state.customSelectorText || '';
+        customSelectorTypeEl.disabled = !state.useCustomSelector;
+        customSelectorEl.disabled = !state.useCustomSelector;
+        customSelectorHintEl.style.display = state.useCustomSelector ? 'block' : 'none';
+        if (state.uiLanguage === 'zh-cn') {
+          customSelectorHintEl.textContent =
+            state.customSelectorType === 'textmate'
+              ? 'TextMate scopes 支持逗号/换行批量输入；建议从 “Developer: Inspect Editor Tokens and Scopes” 复制 scope。'
+              : '语义 selector 形如：tokenType.modifier1.modifier2（例如 function.definition）。';
+        } else {
+          customSelectorHintEl.textContent =
+            state.customSelectorType === 'textmate'
+              ? 'TextMate scopes support comma/newline batch input; copy scopes from “Developer: Inspect Editor Tokens and Scopes”.'
+              : 'Semantic selector format: tokenType.modifier1.modifier2 (e.g. function.definition).';
+        }
+
+        const isTextMateCustom = !!state.useCustomSelector && state.customSelectorType === 'textmate';
+        modifierListEl.style.opacity = isTextMateCustom ? '0.55' : '1';
+        modifierInfoEl.style.opacity = isTextMateCustom ? '0.55' : '1';
 
         renderModifierList();
         renderModifierInfo(effectiveStyle);
@@ -1788,7 +2084,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
                 : 'Effective: theme default';
         }
 
-        const disabled = !state.selectedTokenType;
+        const disabled = state.useCustomSelector ? !((state.customSelectorText || '').trim()) : !state.selectedTokenType;
         fgColor.disabled = disabled;
         fgText.disabled = disabled;
         boldChk.disabled = disabled;
@@ -1812,12 +2108,13 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         modifierListEl.innerHTML = '';
         const mods = state.tokenModifiers || [];
         const selected = new Set(state.selectedModifiers || []);
+        const disableAll = !state.selectedTokenType || (state.useCustomSelector && state.customSelectorType === 'textmate');
         for (const m of mods) {
           const label = document.createElement('label');
           const chk = document.createElement('input');
           chk.type = 'checkbox';
           chk.checked = selected.has(m);
-          chk.disabled = !state.selectedTokenType;
+          chk.disabled = disableAll;
           chk.addEventListener('change', () => {
             const next = new Set(state.selectedModifiers || []);
             if (chk.checked) next.add(m); else next.delete(m);
@@ -1837,6 +2134,18 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
 
       fontFamilyEl.addEventListener('input', () => {
         vscode.postMessage({ type: 'setFontFamily', payload: { fontFamily: fontFamilyEl.value } });
+      });
+
+      useCustomSelectorEl.addEventListener('change', () => {
+        vscode.postMessage({ type: 'setCustomSelectorEnabled', payload: { enabled: useCustomSelectorEl.checked } });
+      });
+
+      customSelectorTypeEl.addEventListener('change', () => {
+        vscode.postMessage({ type: 'setCustomSelectorType', payload: { selectorType: customSelectorTypeEl.value } });
+      });
+
+      customSelectorEl.addEventListener('input', () => {
+        vscode.postMessage({ type: 'setCustomSelectorText', payload: { text: customSelectorEl.value } });
       });
 
       fgColor.addEventListener('input', () => {

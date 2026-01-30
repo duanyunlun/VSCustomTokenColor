@@ -5,6 +5,7 @@ export type PresetScope = 'user' | 'workspace';
 
 export type LanguagePreset = {
   tokenRules: TokenStyleRules;
+  textMateRules?: TokenStyleRules;
   fontFamily?: string;
 };
 
