@@ -26,6 +26,19 @@ export const LSP_STANDARD_TOKEN_TYPES: readonly string[] = [
   'decorator'
 ];
 
+export const LSP_STANDARD_TOKEN_MODIFIERS: readonly string[] = [
+  'declaration',
+  'definition',
+  'readonly',
+  'static',
+  'deprecated',
+  'abstract',
+  'async',
+  'modification',
+  'documentation',
+  'defaultLibrary'
+];
+
 export type TokenTypeDiscovery = {
   standard: string[];
   csharp: string[];

@@ -11,6 +11,24 @@ type SemanticTokenCustomizationsSnapshot = {
 
 const SNAPSHOT_STATE_KEY = 'tokenstyler.snapshot.editor.semanticTokenColorCustomizations.v1';
 const MANAGED_SELECTORS_STATE_KEY = 'tokenstyler.managedSelectors.editor.semanticTokenColorCustomizations.v1';
+const PENDING_ROLLBACK_STATE_KEY = 'tokenstyler.pendingRollback.editor.semanticTokenColorCustomizations.v1';
+
+export function isSemanticTokenCustomizationsRollbackPending(
+  context: vscode.ExtensionContext,
+  target: WriteTarget
+): boolean {
+  const state = getState(context, target);
+  return state.get<boolean>(PENDING_ROLLBACK_STATE_KEY) === true;
+}
+
+export async function setSemanticTokenCustomizationsRollbackPending(
+  context: vscode.ExtensionContext,
+  target: WriteTarget,
+  pending: boolean
+): Promise<void> {
+  const state = getState(context, target);
+  await state.update(PENDING_ROLLBACK_STATE_KEY, pending ? true : undefined);
+}
 
 export async function takeSemanticTokenColorCustomizationsSnapshot(
   context: vscode.ExtensionContext,
@@ -20,6 +38,7 @@ export async function takeSemanticTokenColorCustomizationsSnapshot(
   const inspected = editorConfig.inspect<unknown>('semanticTokenColorCustomizations');
   const existingValue = target === 'global' ? inspected?.globalValue : inspected?.workspaceValue;
   await saveSnapshot(context, target, existingValue);
+  await setSemanticTokenCustomizationsRollbackPending(context, target, true);
 }
 
 export async function restoreSemanticTokenCustomizationsSnapshotSilently(
@@ -37,6 +56,7 @@ export async function restoreSemanticTokenCustomizationsSnapshotSilently(
     target === 'global' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace
   );
   await clearManagedSelectors(context, target);
+  await setSemanticTokenCustomizationsRollbackPending(context, target, false);
 }
 
 export async function pickWriteTarget(): Promise<WriteTarget | undefined> {
@@ -187,6 +207,7 @@ export async function restoreSemanticTokenCustomizationsSnapshot(
   );
 
   await clearManagedSelectors(context, target);
+  await setSemanticTokenCustomizationsRollbackPending(context, target, false);
 
   const targetLabel = target === 'global' ? '用户（User）' : '工作区（Workspace）';
   void vscode.window.showInformationMessage(
