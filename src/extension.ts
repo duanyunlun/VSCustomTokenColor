@@ -178,7 +178,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const preferWorkspaceScope = hasWorkspace && workspaceHasSemanticTokenColorCustomizations();
       let scope: PresetScope = preferWorkspaceScope ? 'workspace' : 'user';
       let layer: EditableLayer = 'language';
-      const languageBindings = getLanguageBindings();
+      const languageBindings = getLanguageBindings().filter((l) => isExtensionInstalled(l.recommendedExtensionId));
 
       // 默认选第一个语言
       let selectedLanguage = languageBindings.find((x) => x.key === 'csharp') ?? languageBindings[0] ?? {
@@ -800,11 +800,13 @@ function getLanguageBindings(): LanguageBinding[] {
 }
 
 function getLanguageItems(): WebviewLanguageItem[] {
-  return getLanguageBindings().map((l) => ({
-    key: l.key,
-    label: l.label,
-    installed: isExtensionInstalled(l.recommendedExtensionId)
-  }));
+  return getLanguageBindings()
+    .filter((l) => isExtensionInstalled(l.recommendedExtensionId))
+    .map((l) => ({
+      key: l.key,
+      label: l.label,
+      installed: true
+    }));
 }
 
 function getCurrentThemeName(): string {
