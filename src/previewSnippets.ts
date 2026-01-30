@@ -55,6 +55,7 @@ export function getPreviewFileExtensionForLanguageId(languageId: string): string
   if (id === 'yaml' || id === 'yml') return 'yaml';
   if (id === 'ruby') return 'rb';
   if (id === 'dart') return 'dart';
+  if (id === 'xaml') return 'xaml';
   return 'txt';
 }
 
@@ -66,8 +67,43 @@ export function getPreviewContentForLanguageId(languageId: string): string {
   if (id === 'python') return getPythonSnippet();
   if (id === 'go') return getGoSnippet();
   if (id === 'rust') return getRustSnippet();
+  if (id === 'xaml') return getXamlSnippet();
   // 其它语言暂用通用片段（仍会设置 languageId 触发语义高亮；片段不一定完全有效语法）
   return getGenericSnippet();
+}
+
+function getXamlSnippet(): string {
+  return [
+    '<!-- Token Styler Preview (XAML) -->',
+    '<!-- 注意：很多 XAML 语法高亮来自 TextMate，而本扩展编辑的是 semanticTokenColorCustomizations（语义 token）。 -->',
+    '',
+    '<Window x:Class="TokenStylerPreview.MainWindow"',
+    '        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"',
+    '        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"',
+    '        xmlns:local="clr-namespace:TokenStylerPreview"',
+    '        Title="MainWindow" Height="300" Width="520">',
+    '  <Grid Margin="12">',
+    '    <Grid.RowDefinitions>',
+    '      <RowDefinition Height="Auto" />',
+    '      <RowDefinition Height="*" />',
+    '    </Grid.RowDefinitions>',
+    '',
+    '    <TextBlock FontSize="16" FontWeight="Bold" Text="Hello XAML" />',
+    '',
+    '    <StackPanel Grid.Row="1" Margin="0,10,0,0">',
+    '      <Button Content="Click" Width="120" Margin="0,0,0,8" />',
+    '      <TextBox Text="{Binding Path=UserName, Mode=TwoWay}" />',
+    '      <TextBlock Text="{x:Static local:Constants.AppName}" />',
+    '      <TextBlock Text="{Binding ElementName=MyList, Path=SelectedItem}" />',
+    '      <ListBox x:Name="MyList">',
+    '        <ListBoxItem Content="Item 1" />',
+    '        <ListBoxItem Content="Item 2" />',
+    '      </ListBox>',
+    '    </StackPanel>',
+    '  </Grid>',
+    '</Window>',
+    ''
+  ].join('\n');
 }
 
 function getGenericSnippet(): string {
