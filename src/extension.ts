@@ -61,6 +61,7 @@ type WebviewState = {
   semanticHighlightingEnabled: boolean;
   languageSemanticHighlighting?: { exists: boolean; state: TriState };
   editorSemanticHighlightingOverride?: { state: TriState };
+  semanticTokensAvailability?: 'unknown' | 'available' | 'empty' | 'unsupported' | 'error';
   dirty: boolean;
 };
 
@@ -79,6 +80,34 @@ type MiscSnapshot = {
   preLangSemanticExists?: boolean;
   preEditorSemanticState?: TriState;
 };
+
+async function probeDocumentSemanticTokensAvailability(doc: vscode.TextDocument): Promise<WebviewState['semanticTokensAvailability']> {
+  try {
+    const commands = await vscode.commands.getCommands(true);
+    if (!commands.includes('vscode.provideDocumentSemanticTokens')) {
+      return 'unsupported';
+    }
+
+    const tokens = await vscode.commands.executeCommand<unknown>('vscode.provideDocumentSemanticTokens', doc.uri);
+    if (!tokens || typeof tokens !== 'object') {
+      return 'empty';
+    }
+    const anyTokens = tokens as { data?: unknown };
+    const data = anyTokens.data as unknown;
+    if (data instanceof Uint32Array) {
+      return data.length > 0 ? 'available' : 'empty';
+    }
+    if (Array.isArray(data)) {
+      return data.length > 0 ? 'available' : 'empty';
+    }
+    if (data && typeof data === 'object' && typeof (data as any).length === 'number') {
+      return (data as any).length > 0 ? 'available' : 'empty';
+    }
+    return 'empty';
+  } catch {
+    return 'error';
+  }
+}
 
 function getMiscState(context: vscode.ExtensionContext, scope: PresetScope): vscode.Memento {
   return scope === 'user' ? context.globalState : context.workspaceState;
@@ -188,6 +217,7 @@ export function activate(context: vscode.ExtensionContext): void {
         recommendedExtensionId: 'ms-dotnettools.csharp',
         semanticTokenTypeCount: 0
       };
+      let semanticTokensAvailability: WebviewState['semanticTokensAvailability'] = 'unknown';
       let presetsByTheme = loadPresets(context, scope);
       let selectedTokenType: string | undefined;
       let selectedModifiers: string[] = [];
@@ -234,6 +264,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const doc0 = await vscode.workspace.openTextDocument(uri);
         const doc = await vscode.languages.setTextDocumentLanguage(doc0, selectedLanguage.languageId);
         await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
+
+        // 探测该 languageId 是否实际产出语义 tokens（某些语言仅有 TextMate 高亮，例如 XAML 场景）。
+        semanticTokensAvailability = await probeDocumentSemanticTokensAvailability(doc);
       };
 
       const computeLanguageTokenTypes = (): string[] => {
@@ -316,6 +349,7 @@ export function activate(context: vscode.ExtensionContext): void {
           semanticHighlightingEnabled,
           languageSemanticHighlighting,
           editorSemanticHighlightingOverride,
+          semanticTokensAvailability,
           dirty
         };
       };
@@ -647,7 +681,7 @@ export function activate(context: vscode.ExtensionContext): void {
           await openOrRevealPreview();
           await postState();
           return;
-        }
+          }
 
         if (msg.type === 'selectTokenType') {
           const payload = msg.payload as { tokenType?: unknown };
@@ -1447,6 +1481,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
               </div>
             </div>
           </div>
+          <div id="semanticAvailabilityHint" class="hint danger" style="display:none; margin-top:6px"></div>
 
           <div class="divider"></div>
 
@@ -1530,6 +1565,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
       const editorSemanticToggleEl = document.getElementById('editorSemanticToggle');
       const editorSemanticBoxEl = document.getElementById('editorSemanticBox');
       const editorSemanticStateTextEl = document.getElementById('editorSemanticStateText');
+      const semanticAvailabilityHintEl = document.getElementById('semanticAvailabilityHint');
       const modifierListEl = document.getElementById('modifierList');
       const modifierInfoEl = document.getElementById('modifierInfo');
       const fontFamilyEl = document.getElementById('fontFamily');
@@ -1684,6 +1720,22 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
           applyTriState(editorSemanticBoxEl, editorSemanticStateTextEl, state.editorSemanticHighlightingOverride.state || 'inherit');
         } else {
           applyTriState(editorSemanticBoxEl, editorSemanticStateTextEl, 'inherit');
+        }
+
+        if (state.layer === 'language' && state.semanticTokensAvailability && state.semanticTokensAvailability !== 'available' && state.semanticTokensAvailability !== 'unknown') {
+          semanticAvailabilityHintEl.style.display = 'block';
+          if (state.uiLanguage === 'zh-cn') {
+            semanticAvailabilityHintEl.textContent =
+              '提示：当前语言可能没有提供语义 Token（或数据为空），所以 editor.semanticTokenColorCustomizations 不一定会生效。这通常不是本扩展问题，而是语言服务能力/实现所致。' +
+              ' 如需给该语言配色，可能需要使用 editor.tokenColorCustomizations（TextMate scopes）。';
+          } else {
+            semanticAvailabilityHintEl.textContent =
+              'Note: this language may not provide semantic tokens (or returns empty data), so editor.semanticTokenColorCustomizations may not take effect. This is usually due to the language service. ' +
+              ' You may need editor.tokenColorCustomizations (TextMate scopes) for coloring.';
+          }
+        } else {
+          semanticAvailabilityHintEl.style.display = 'none';
+          semanticAvailabilityHintEl.textContent = '';
         }
 
         const workspaceOption = scopeSelect.querySelector('option[value="workspace"]');
