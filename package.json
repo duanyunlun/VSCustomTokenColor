@@ -1,0 +1,41 @@
+{
+  "name": "token-styler",
+  "displayName": "Token Styler",
+  "description": "GUI editor for VS Code semantic token styles (MVP WIP).",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:tokenstyler.open",
+    "onCommand:tokenstyler.openPreview"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tokenstyler.open",
+        "title": "Token Styler: Open"
+      },
+      {
+        "command": "tokenstyler.openPreview",
+        "title": "Token Styler: Open Preview"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "echo \"No tests yet\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.6.3"
+  }
+}
