@@ -6,7 +6,7 @@ import {
   getSemanticTokenTypeItemsFromExtension,
   isExtensionInstalled
 } from './languageContributions';
-import { OFFICIAL_LANGUAGES, OfficialLanguage } from './officialLanguages';
+import { OFFICIAL_LANGUAGES } from './officialLanguages';
 import {
   getLanguagePreset,
   initSync,
@@ -24,9 +24,10 @@ import {
   setSemanticTokenCustomizationsRollbackPending,
   takeSemanticTokenColorCustomizationsSnapshot
 } from './settingsApplier';
-import { getPreviewFileExtension, PreviewLanguageKey } from './previewSnippets';
+import { getPreviewFileExtensionForLanguageId } from './previewSnippets';
 import { parseVsCodeSemanticTokenRuleValue } from './semanticTokenCustomizations';
 import { LSP_STANDARD_TOKEN_MODIFIERS, LSP_STANDARD_TOKEN_TYPES } from './tokenDiscovery';
+import { discoverSemanticTokenLanguageBindings, LanguageBinding } from './languageDiscovery';
 
 type WebviewLanguageItem = {
   key: string;
@@ -161,7 +162,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('tokenstyler.openPreview', async () => {
-      const uri = await ensurePreviewFile(context, 'csharp');
+      const uri = await ensurePreviewFile('csharp');
       const doc0 = await vscode.workspace.openTextDocument(uri);
       const doc = await vscode.languages.setTextDocumentLanguage(doc0, 'csharp');
       await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
@@ -177,10 +178,16 @@ export function activate(context: vscode.ExtensionContext): void {
       const preferWorkspaceScope = hasWorkspace && workspaceHasSemanticTokenColorCustomizations();
       let scope: PresetScope = preferWorkspaceScope ? 'workspace' : 'user';
       let layer: EditableLayer = 'language';
-      const languages = getLanguageItems();
+      const languageBindings = getLanguageBindings();
 
       // 默认选第一个语言
-      let selectedLanguage = OFFICIAL_LANGUAGES[0]!;
+      let selectedLanguage = languageBindings.find((x) => x.key === 'csharp') ?? languageBindings[0] ?? {
+        key: 'csharp',
+        label: 'C#',
+        languageId: 'csharp',
+        recommendedExtensionId: 'ms-dotnettools.csharp',
+        semanticTokenTypeCount: 0
+      };
       let presetsByTheme = loadPresets(context, scope);
       let selectedTokenType: string | undefined;
       let selectedModifiers: string[] = [];
@@ -223,7 +230,7 @@ export function activate(context: vscode.ExtensionContext): void {
       };
 
       const openOrRevealPreview = async (): Promise<void> => {
-        const uri = await ensurePreviewFile(context, selectedLanguage.key as PreviewLanguageKey);
+        const uri = await ensurePreviewFile(selectedLanguage.languageId);
         const doc0 = await vscode.workspace.openTextDocument(uri);
         const doc = await vscode.languages.setTextDocumentLanguage(doc0, selectedLanguage.languageId);
         await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
@@ -232,7 +239,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const computeLanguageTokenTypes = (): string[] => {
         const extId = selectedLanguage.recommendedExtensionId;
         if (!isExtensionInstalled(extId)) {
-          return [];
+          return [...LSP_STANDARD_TOKEN_TYPES];
         }
         const items = getSemanticTokenTypeItemsFromExtension(extId).map((x) => x.id);
         return items.length > 0 ? items : [...LSP_STANDARD_TOKEN_TYPES];
@@ -449,12 +456,15 @@ export function activate(context: vscode.ExtensionContext): void {
           await applyRulesToSettingsSilently(context, unionRules, themeName, target);
 
           const themePresets = presetsByTheme[themeName] ?? {};
-          for (const lang of OFFICIAL_LANGUAGES) {
-            const preset = themePresets[lang.key];
-            if (!preset) {
-              continue;
-            }
-            await applyLanguageFontFamily(lang.languageId, preset.fontFamily, scope);
+          const bindings = getLanguageBindings();
+          for (const [langKey, preset] of Object.entries(themePresets)) {
+            if (langKey === STANDARD_PRESET_KEY) continue;
+            if (!preset) continue;
+            const langId =
+              bindings.find((b) => b.key === langKey)?.languageId ??
+              OFFICIAL_LANGUAGES.find((o) => o.key === langKey)?.languageId ??
+              langKey;
+            await applyLanguageFontFamily(langId, (preset as any).fontFamily, scope);
           }
         } catch (e) {
           const msg = e instanceof Error ? (e.message || String(e)) : String(e);
@@ -587,7 +597,7 @@ export function activate(context: vscode.ExtensionContext): void {
             if (typeof payload.languageKey !== 'string') {
               return;
             }
-            const next = OFFICIAL_LANGUAGES.find((l) => l.key === payload.languageKey);
+            const next = getLanguageBindings().find((l) => l.key === payload.languageKey);
             if (!next) {
               return;
             }
@@ -752,8 +762,45 @@ export function deactivate(): Thenable<void> | undefined {
   return activeSessionCleanup();
 }
 
+function getLanguageBindings(): LanguageBinding[] {
+  const discovered = discoverSemanticTokenLanguageBindings();
+  const officialByLanguageId = new Map<string, { key: string; label: string; languageId: string; recommendedExtensionId: string }>();
+  for (const o of OFFICIAL_LANGUAGES) {
+    officialByLanguageId.set(o.languageId, o);
+  }
+
+  const byKey = new Map<string, LanguageBinding>();
+
+  for (const d of discovered) {
+    const official = officialByLanguageId.get(d.languageId);
+    const merged: LanguageBinding = official
+      ? {
+          key: official.key,
+          label: official.label,
+          languageId: official.languageId,
+          recommendedExtensionId: d.recommendedExtensionId,
+          semanticTokenTypeCount: d.semanticTokenTypeCount
+        }
+      : d;
+    byKey.set(merged.key, merged);
+  }
+
+  for (const o of OFFICIAL_LANGUAGES) {
+    if (byKey.has(o.key)) continue;
+    byKey.set(o.key, {
+      key: o.key,
+      label: o.label,
+      languageId: o.languageId,
+      recommendedExtensionId: o.recommendedExtensionId,
+      semanticTokenTypeCount: 0
+    });
+  }
+
+  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function getLanguageItems(): WebviewLanguageItem[] {
-  return OFFICIAL_LANGUAGES.map((l) => ({
+  return getLanguageBindings().map((l) => ({
     key: l.key,
     label: l.label,
     installed: isExtensionInstalled(l.recommendedExtensionId)
@@ -925,11 +972,16 @@ function buildOverrideWarning(
 ): string | undefined {
   const theme = presetsByTheme[themeName] ?? {};
   const overlapped: string[] = [];
-  for (const lang of OFFICIAL_LANGUAGES) {
-    const preset = theme[lang.key];
+  const bindings = getLanguageBindings();
+  for (const [langKey, preset] of Object.entries(theme)) {
+    if (langKey === STANDARD_PRESET_KEY) continue;
     if (!preset?.tokenRules) continue;
     if (selector in preset.tokenRules) {
-      overlapped.push(lang.label);
+      const label =
+        bindings.find((b) => b.key === langKey)?.label ??
+        OFFICIAL_LANGUAGES.find((o) => o.key === langKey)?.label ??
+        langKey;
+      overlapped.push(label);
     }
   }
   if (overlapped.length === 0) {
@@ -941,7 +993,7 @@ function buildOverrideWarning(
   return `Note: this selector is already set in language layer (${overlapped.join(', ')}), which overrides the Standard (LSP) layer; changes in Standard may not reflect in preview.`;
 }
 
-function buildTokenHelpText(language: OfficialLanguage, layer: EditableLayer, selector: string): string {
+function buildTokenHelpText(language: LanguageBinding, layer: EditableLayer, selector: string): string {
   const uiLanguage = getUiLanguage();
   const parts = selector.split('.').map((x) => x.trim()).filter(Boolean);
   const tokenType = parts[0] ?? '';
@@ -1019,11 +1071,11 @@ function getStandardTokenTypeDescription(tokenType: string, uiLanguage: 'zh-cn' 
   return uiLanguage === 'zh-cn' ? zh[tokenType] : en[tokenType];
 }
 
-function getLanguageLayerTokenTypeDescription(language: OfficialLanguage, tokenType: string, uiLanguage: 'zh-cn' | 'en'): string | undefined {
+function getLanguageLayerTokenTypeDescription(language: LanguageBinding, tokenType: string, uiLanguage: 'zh-cn' | 'en'): string | undefined {
   const extId = language.recommendedExtensionId;
 
   if (uiLanguage === 'zh-cn') {
-    const zh = getKnownLanguageTokenTypeChineseDescription(language.key, tokenType);
+    const zh = getKnownLanguageTokenTypeChineseDescription(language.languageId, tokenType);
     if (zh) {
       return zh;
     }
@@ -1039,8 +1091,8 @@ function getLanguageLayerTokenTypeDescription(language: OfficialLanguage, tokenT
   return getStandardTokenTypeDescription(tokenType, uiLanguage);
 }
 
-function getKnownLanguageTokenTypeChineseDescription(languageKey: string, tokenType: string): string | undefined {
-  if (languageKey !== 'csharp') {
+function getKnownLanguageTokenTypeChineseDescription(languageId: string, tokenType: string): string | undefined {
+  if (languageId !== 'csharp') {
     return undefined;
   }
 
@@ -1177,11 +1229,9 @@ function buildUnionRules(
   Object.assign(output, standardRulesOverride ?? standardPreset?.tokenRules ?? {});
 
   // 先合并所有已保存预设
-  for (const lang of OFFICIAL_LANGUAGES) {
-    const preset = theme[lang.key];
-    if (!preset) {
-      continue;
-    }
+  for (const [langKey, preset] of Object.entries(theme)) {
+    if (langKey === STANDARD_PRESET_KEY) continue;
+    if (!preset) continue;
     Object.assign(output, preset.tokenRules ?? {});
   }
 
@@ -1195,13 +1245,12 @@ function buildUnionRules(
 
 // 已改为“编辑前快照回滚”，不再使用该函数。
 
-async function ensurePreviewFile(context: vscode.ExtensionContext, languageKey: PreviewLanguageKey): Promise<vscode.Uri> {
-  const ext = getPreviewFileExtension(languageKey);
-
+async function ensurePreviewFile(languageId: string): Promise<vscode.Uri> {
+  const ext = getPreviewFileExtensionForLanguageId(languageId);
   // 使用虚拟文档（TextDocumentContentProvider）提供预览内容，避免在工作区写入任何文件污染仓库。
-  // 通过扩展名让 provider 选择对应语言片段。
-  void context;
-  return vscode.Uri.parse(`${TOKEN_STYLER_PREVIEW_SCHEME}:/preview.${ext}`);
+  // languageId 放在 query 中，provider 用它选择预览片段。
+  const q = encodeURIComponent(languageId || '');
+  return vscode.Uri.parse(`${TOKEN_STYLER_PREVIEW_SCHEME}:/preview.${ext}?lang=${q}`);
 }
 
 function clonePreset(preset: { tokenRules: TokenStyleRules; fontFamily?: string }): { tokenRules: TokenStyleRules; fontFamily?: string } {

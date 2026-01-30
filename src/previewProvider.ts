@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getPreviewContent } from './previewSnippets';
+import { getPreviewContentForLanguageId } from './previewSnippets';
 
 export class TokenStylerPreviewProvider implements vscode.TextDocumentContentProvider {
   private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
@@ -10,13 +10,8 @@ export class TokenStylerPreviewProvider implements vscode.TextDocumentContentPro
   }
 
   public provideTextDocumentContent(uri: vscode.Uri): string {
-    const pathLower = uri.path.toLowerCase();
-    if (pathLower.endsWith('.cs')) return getPreviewContent('csharp');
-    if (pathLower.endsWith('.java')) return getPreviewContent('java');
-    if (pathLower.endsWith('.cpp')) return getPreviewContent('cpp');
-    if (pathLower.endsWith('.py')) return getPreviewContent('python');
-    if (pathLower.endsWith('.go')) return getPreviewContent('go');
-    if (pathLower.endsWith('.rs')) return getPreviewContent('rust');
-    return getPreviewContent('generic');
+    const params = new URLSearchParams(uri.query || '');
+    const languageId = params.get('lang') || '';
+    return getPreviewContentForLanguageId(languageId);
   }
 }

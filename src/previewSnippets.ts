@@ -38,6 +38,38 @@ export function getPreviewContent(languageKey: PreviewLanguageKey): string {
   }
 }
 
+export function getPreviewFileExtensionForLanguageId(languageId: string): string {
+  const id = (languageId || '').toLowerCase();
+  if (id === 'csharp') return 'cs';
+  if (id === 'java') return 'java';
+  if (id === 'cpp' || id === 'c') return 'cpp';
+  if (id === 'python') return 'py';
+  if (id === 'go') return 'go';
+  if (id === 'rust') return 'rs';
+  if (id === 'typescript') return 'ts';
+  if (id === 'javascript') return 'js';
+  if (id === 'json') return 'json';
+  if (id === 'html') return 'html';
+  if (id === 'css') return 'css';
+  if (id === 'php') return 'php';
+  if (id === 'yaml' || id === 'yml') return 'yaml';
+  if (id === 'ruby') return 'rb';
+  if (id === 'dart') return 'dart';
+  return 'txt';
+}
+
+export function getPreviewContentForLanguageId(languageId: string): string {
+  const id = (languageId || '').toLowerCase();
+  if (id === 'csharp') return getCSharpSnippet();
+  if (id === 'java') return getJavaSnippet();
+  if (id === 'cpp' || id === 'c') return getCppSnippet();
+  if (id === 'python') return getPythonSnippet();
+  if (id === 'go') return getGoSnippet();
+  if (id === 'rust') return getRustSnippet();
+  // 其它语言暂用通用片段（仍会设置 languageId 触发语义高亮；片段不一定完全有效语法）
+  return getGenericSnippet();
+}
+
 function getGenericSnippet(): string {
   return [
     '/* Token Styler Preview (generic / TypeScript) */',
