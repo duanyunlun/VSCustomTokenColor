@@ -14,6 +14,41 @@ export const OFFICIAL_LANGUAGES: readonly OfficialLanguage[] = [
     recommendedExtensionId: 'ms-dotnettools.csharp'
   },
   {
+    key: 'typescript',
+    label: 'TypeScript',
+    languageId: 'typescript',
+    // VS Code 内置
+    recommendedExtensionId: 'vscode.typescript-language-features'
+  },
+  {
+    key: 'javascript',
+    label: 'JavaScript',
+    languageId: 'javascript',
+    // VS Code 内置
+    recommendedExtensionId: 'vscode.typescript-language-features'
+  },
+  {
+    key: 'json',
+    label: 'JSON',
+    languageId: 'json',
+    // VS Code 内置
+    recommendedExtensionId: 'vscode.json-language-features'
+  },
+  {
+    key: 'html',
+    label: 'HTML',
+    languageId: 'html',
+    // VS Code 内置
+    recommendedExtensionId: 'vscode.html-language-features'
+  },
+  {
+    key: 'css',
+    label: 'CSS',
+    languageId: 'css',
+    // VS Code 内置
+    recommendedExtensionId: 'vscode.css-language-features'
+  },
+  {
     key: 'java',
     label: 'Java',
     languageId: 'java',
@@ -32,6 +67,30 @@ export const OFFICIAL_LANGUAGES: readonly OfficialLanguage[] = [
     recommendedExtensionId: 'ms-python.python'
   },
   {
+    key: 'php',
+    label: 'PHP',
+    languageId: 'php',
+    recommendedExtensionId: 'bmewburn.vscode-intelephense-client'
+  },
+  {
+    key: 'yaml',
+    label: 'YAML',
+    languageId: 'yaml',
+    recommendedExtensionId: 'redhat.vscode-yaml'
+  },
+  {
+    key: 'ruby',
+    label: 'Ruby',
+    languageId: 'ruby',
+    recommendedExtensionId: 'Shopify.ruby-lsp'
+  },
+  {
+    key: 'dart',
+    label: 'Dart',
+    languageId: 'dart',
+    recommendedExtensionId: 'Dart-Code.dart-code'
+  },
+  {
     key: 'go',
     label: 'Go',
     languageId: 'go',
@@ -44,4 +103,3 @@ export const OFFICIAL_LANGUAGES: readonly OfficialLanguage[] = [
     recommendedExtensionId: 'rust-lang.rust-analyzer'
   }
 ];
-

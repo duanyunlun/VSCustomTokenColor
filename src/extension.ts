@@ -234,7 +234,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!isExtensionInstalled(extId)) {
           return [];
         }
-        return getSemanticTokenTypeItemsFromExtension(extId).map((x) => x.id);
+        const items = getSemanticTokenTypeItemsFromExtension(extId).map((x) => x.id);
+        return items.length > 0 ? items : [...LSP_STANDARD_TOKEN_TYPES];
       };
 
       const computeLanguageTokenModifiers = (): string[] => {
@@ -244,7 +245,8 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         const extMods = getSemanticTokenModifierItemsFromExtension(extId).map((x) => x.id);
         const all = [...LSP_STANDARD_TOKEN_MODIFIERS, ...extMods];
-        return [...new Set(all)].sort();
+        const uniq = [...new Set(all)].sort();
+        return uniq.length > 0 ? uniq : [...LSP_STANDARD_TOKEN_MODIFIERS];
       };
 
       const buildState = (): WebviewState => {
@@ -1571,7 +1573,11 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         for (const lang of state.languages) {
           const item = document.createElement('div');
           item.className = 'item' + (lang.key === state.selectedLanguageKey ? ' selected' : '');
-          item.textContent = lang.label + (lang.installed ? '' : ' (未安装)');
+          if (lang.installed) {
+            item.textContent = lang.label;
+          } else {
+            item.textContent = lang.label + (state.uiLanguage === 'zh-cn' ? ' (未安装)' : ' (Not Installed)');
+          }
           item.addEventListener('click', () => vscode.postMessage({ type: 'selectLanguage', payload: { languageKey: lang.key } }));
           languageList.appendChild(item);
         }
