@@ -1,0 +1,57 @@
+name: Bump version and tag
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Decide version bump
+        id: bump
+        shell: bash
+        run: |
+          msg="$(git log -1 --pretty=%s)"
+          echo "HEAD commit message: $msg"
+
+          bump="patch"
+          if echo "$msg" | grep -Eqi "BREAKING CHANGE|!:|^feat!:"; then
+            bump="major"
+          elif echo "$msg" | grep -Eqi "^feat(\\(|:)" ; then
+            bump="minor"
+          fi
+
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version (creates commit + tag)
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          npm version "${{ steps.bump.outputs.bump }}" -m "chore(release): v%s"
+
+      - name: Push commit and tag
+        run: |
+          git push origin HEAD:main --follow-tags
+

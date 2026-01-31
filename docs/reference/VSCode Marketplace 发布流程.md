@@ -43,6 +43,18 @@
 
 工作流示例已加入仓库：`.github/workflows/publish.yml`。
 
+### 4.1 “每次提交自动发布”的自动化（当前仓库实现）
+仓库已加入两段自动化：
+
+1) push 到 `main`：自动递增版本号并打 tag（`.github/workflows/bump.yml`）
+   - 默认 bump 为 `patch`
+   - commit message 以 `feat:`（或 `feat(...)`）开头 → bump `minor`
+   - commit message 包含 `BREAKING CHANGE` 或 `!:` → bump `major`
+2) tag `v*`：自动创建 GitHub Release 并发布到 VS Code Marketplace（`.github/workflows/publish.yml`）
+
+注意：
+- 这会导致**每次 push main 都产生一个新版本与一个 Release**。如果你更希望“按里程碑/按 PR”发布，建议改为 release-please 或手动打 tag。
+
 ## 5. 常见注意事项
 1) 版本号：发布前确保 `package.json.version` 递增（语义化版本）。
 2) 说明文档：Marketplace 会展示 `README.md`（建议包含主要能力与使用说明）。
