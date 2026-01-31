@@ -17,10 +17,6 @@
   "bugs": {
     "url": "https://github.com/duanyunlun/VSCustomTokenColor/issues"
   },
-  "activationEvents": [
-    "onCommand:tokenstyler.open",
-    "onCommand:tokenstyler.openPreview"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
