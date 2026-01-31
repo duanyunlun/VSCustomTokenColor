@@ -2,7 +2,7 @@
   "name": "token-styler",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "liekong1991",
   "engines": {
     "vscode": "^1.90.0"
