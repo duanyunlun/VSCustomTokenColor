@@ -50,7 +50,11 @@
    - 默认 bump 为 `patch`
    - commit message 以 `feat:`（或 `feat(...)`）开头 → bump `minor`
    - commit message 包含 `BREAKING CHANGE` 或 `!:` → bump `major`
-2) tag `v*`：自动创建 GitHub Release 并发布到 VS Code Marketplace（`.github/workflows/publish.yml`）
+2) bump 工作流成功后：自动打包 VSIX、创建/更新 GitHub Release（附带 VSIX），并发布到 VS Code Marketplace（`.github/workflows/publish.yml`）
+   - 触发方式是 `workflow_run`（监听 `Bump version and tag`）
+   - 原因：GitHub Actions 内用默认 `GITHUB_TOKEN` 推送出来的 tag，默认不会触发其他工作流的 `push tags`（否则会被 GitHub 安全策略拦截），所以不能依赖 `on: push: tags: ...`
+
+补充：如果要补发某个历史 tag（例如 `v0.0.2`）到 Marketplace，可在 Actions 手动触发 `Publish to VS Code Marketplace`，并填入 `tag` 参数。
 
 注意：
 - 这会导致**每次 push main 都产生一个新版本与一个 Release**。如果你更希望“按里程碑/按 PR”发布，建议改为 release-please 或手动打 tag。
@@ -60,3 +64,4 @@
 2) 说明文档：Marketplace 会展示 `README.md`（建议包含主要能力与使用说明）。
 3) 文件体积：通过 `.vscodeignore` 控制打包内容，避免把源码/文档/开发依赖打进 vsix。
 4) License：打包时如果没有 `LICENSE*` 文件会有警告。是否添加 License 属于授权决策，需由仓库负责人确认后再补充。
+   - 当前 CI 发布使用 `--skip-license` 作为兜底（避免因为缺失 License 而阻塞发布）。
