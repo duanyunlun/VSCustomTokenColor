@@ -2,6 +2,8 @@
 
 一个用于配置 VS Code 语义 Token（Semantic Tokens）与 TextMate scopes 的 GUI 面板，并提供真实渲染的预览文档。
 
+> English: see `README.en.md`.
+
 ## 功能概览（当前实现）
 
 - 真实预览：打开面板后自动在右侧打开预览文档（虚拟文档 `tokenstyler-preview:`；不会写入工作区文件）
@@ -21,7 +23,7 @@
    - `Token Styler: Open`：打开配置面板 + 预览
    - `Token Styler: Open Preview`：只打开预览
 3) 若要配置 C/C++ 这类“Inspect 显示的是 textmate scopes、而不是语义 token”的高亮：
-   - 在预览中执行 `Developer: Inspect Editor Tokens and Scopes`
+   - 在预览中执行 `Developer: Inspect Editor Tokens and Scopes` 或者 快捷键：Ctrl+Shift+I (默认就是这个)
    - 复制弹窗中的 scope（例如 `entity.name.function.definition.cpp`）
    - 回到 Token Styler，Token 下拉选择 `TextMate Scopes`，在搜索框粘贴并回车选中，再设置颜色/样式
 

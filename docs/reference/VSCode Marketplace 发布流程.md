@@ -12,9 +12,17 @@
 
 ## 1. 准备账号与凭证（只做一次）
 1) 在 Visual Studio Marketplace 创建 Publisher（获取 Publisher ID）。
-2) 生成用于发布的 PAT（Personal Access Token），并妥善保管：
+2) 生成用于发布的 PAT（Personal Access Token，Azure DevOps PAT），并妥善保管：
    - 不要写入仓库文件
    - 不要写到进度文档/issue/commit message
+   - 该 PAT **不可再次查看**，丢失只能重新生成
+
+### 1.1 在哪里创建 PAT（Azure DevOps）
+在任意组织下进入个人设置创建（不要求与你的 GitHub 仓库同源）：
+1) 打开 Azure DevOps → 个人设置 → Personal access tokens
+2) New Token：
+   - Organization：选择任意可用组织
+   - Scopes：选择 Marketplace 相关权限（至少包含 Publish）
 
 ## 2. 本地打包验证（建议每次发布前都做）
 1) 安装依赖：`npm ci`
@@ -28,7 +36,12 @@
 3) 发布：`npm run publish`
 
 ## 4. CI 发布（可选）
-可在 CI 环境注入 `VSCE_PAT`，并在打 tag 或发布 Release 时自动执行 `vsce publish`。
+可在 GitHub Actions 注入 `VSCE_PAT`，并在打 tag 或手动触发时自动执行 `vsce publish`：
+1) GitHub 仓库 → Settings → Secrets and variables → Actions → New repository secret
+2) 名称：`VSCE_PAT`
+3) 值：上一步生成的 PAT
+
+工作流示例已加入仓库：`.github/workflows/publish.yml`。
 
 ## 5. 常见注意事项
 1) 版本号：发布前确保 `package.json.version` 递增（语义化版本）。

@@ -1,6 +1,7 @@
 .git/**
 .vscode/**
 .gitignore
+.github/**
 docs/**
 src/**
 out/**/*.map
