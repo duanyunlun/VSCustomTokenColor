@@ -1,0 +1,6 @@
+{
+  "extension.displayName": "Token Styler（语义 Token 配色）",
+  "extension.description": "VS Code 语义 Token/TextMate scopes 配色的图形化编辑与预览（MVP 开发中）。",
+  "command.open.title": "Token Styler：打开面板",
+  "command.openPreview.title": "Token Styler：打开预览"
+}

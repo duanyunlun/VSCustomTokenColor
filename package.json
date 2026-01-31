@@ -1,7 +1,7 @@
 {
   "name": "token-styler",
-  "displayName": "Token Styler",
-  "description": "GUI editor for VS Code semantic token styles (MVP WIP).",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "0.0.1",
   "publisher": "local",
   "engines": {
@@ -26,11 +26,11 @@
     "commands": [
       {
         "command": "tokenstyler.open",
-        "title": "Token Styler: Open"
+        "title": "%command.open.title%"
       },
       {
         "command": "tokenstyler.openPreview",
-        "title": "Token Styler: Open Preview"
+        "title": "%command.openPreview.title%"
       }
     ]
   },

@@ -1,32 +1,46 @@
 # Token Styler（开发中）
 
-目标：提供语义 Token 配色的图形化配置与预览（见 `docs/`）。
+一个用于配置 VS Code 语义 Token（Semantic Tokens）与 TextMate scopes 的 GUI 面板，并提供真实渲染的预览文档。
+
+## 功能概览（当前实现）
+
+- 真实预览：打开面板后自动在右侧打开预览文档（虚拟文档 `tokenstyler-preview:`；不会写入工作区文件）
+- 三种编辑模式（Token 列表顶部下拉）：
+  - 语义：语言扩展（来自扩展 `contributes.semanticTokenTypes/modifiers`）→ 写入 `editor.semanticTokenColorCustomizations`
+  - 语义：标准（LSP 23）→ 写入 `editor.semanticTokenColorCustomizations`
+  - TextMate Scopes（从 Inspect 复制 scope）→ 写入 `editor.tokenColorCustomizations`
+- Scope（写入位置）：用户（User）/ 工作区（Workspace）
+- 字体：按语言写入 `[language].editor.fontFamily`（按 scope 存储/应用）
+- 语义高亮开关：可配置 `editor.semanticHighlighting.enabled`、`<language>.semanticHighlighting.enabled`、`[language].editor.semanticHighlighting.enabled`
+- 会话安全：未保存关闭面板会自动回滚本次会话对 settings/字体/开关的临时更改（下次启动也会尝试兜底回滚未完成会话）
+
+## 使用方式
+
+1) 打开命令面板（Ctrl/Cmd+Shift+P）
+2) 执行以下命令之一：
+   - `Token Styler: Open`：打开配置面板 + 预览
+   - `Token Styler: Open Preview`：只打开预览
+3) 若要配置 C/C++ 这类“Inspect 显示的是 textmate scopes、而不是语义 token”的高亮：
+   - 在预览中执行 `Developer: Inspect Editor Tokens and Scopes`
+   - 复制弹窗中的 scope（例如 `entity.name.function.definition.cpp`）
+   - 回到 Token Styler，Token 下拉选择 `TextMate Scopes`，在搜索框粘贴并回车选中，再设置颜色/样式
+
+## 语言与隔离（重要）
+
+- `editor.semanticTokenColorCustomizations` 与 `editor.tokenColorCustomizations` 都是“按主题的全局规则”，无法做到真正意义上的“按 languageId 隔离”。
+- TextMate scopes 常带 `.cpp/.cs` 等后缀，这通常是 grammar 的命名约定，因而在实践中会“自然区分语言”，但并非 VS Code 的语言级隔离机制。
+
+## 扩展显示语言（中文/英文）
+
+- 扩展在 VS Code 中显示的文本（扩展名、描述、命令标题等）会跟随 VS Code 的 UI 语言：
+  - 中文环境显示中文
+  - 英文环境显示英文
 
 ## 开发与运行（Extension Development Host）
 
 1) 安装依赖：`npm install`
 2) 编译：`npm run compile`
 3) 在 VS Code 打开本仓库，按 `F5` 启动 Extension Development Host
-
-## 当前可用能力（MVP）
-
-- `Token Styler: Open`：打开配置面板（左侧）并自动在右侧打开预览文档（真实 VS Code 渲染）
-- `Token Styler: Open Preview`：单独打开预览文档（使用虚拟文档 `tokenstyler-preview:`；不会在工作区写入文件）
-- 配置面板：顶部目前只有 2 个按钮（保存当前配置 / 恢复当前配置），并提供 Scope（用户/工作区）、主题名与“未保存”提示
-- 语言列表：内置若干“官方/事实标准”语义 token 支持语言；当前仅展示“已安装/内置”的语言（若未安装扩展，需要先安装对应扩展后才会出现在列表中）
-- Token Types：支持在“标准（LSP 23）”与“语言扩展（contributes.semanticTokenTypes）”两层间切换编辑
-- 字体配置：可为所选语言配置 `editor.fontFamily`（以 VS Code language override 写入；按 scope+主题存储）
-- 语义开关：支持编辑 `editor.semanticHighlighting.enabled`、`<language>.semanticHighlighting.enabled`、以及 `[language].editor.semanticHighlighting.enabled`（三态：继承/开/关）
-- TextMate scopes：在 Token 列表顶部下拉中切换到 `TextMate Scopes`，即可为 Inspect 面板里显示的 textmate scopes 写入 `editor.tokenColorCustomizations`
-- 会话安全：未保存时关闭面板会自动回滚本次会话对 settings/字体/语义开关的临时更改（下次启动也会尝试自动回滚未完成会话）
-
-## 注意
-
-- 当前为“静态模式（按主题）”写入：只会写入当前选择的主题 block（`[ThemeName]`）。
-- TokenType 发现来源：
-  - 标准层：内置 LSP 23 个标准 token types
-  - 语言层：读取对应语言扩展的 `contributes.semanticTokenTypes`（若扩展未安装则该语言不会出现在语言列表中）
-- `editor.semanticTokenColorCustomizations` 是“按主题的全局规则”：对某个 tokenType/selector 的定制会影响所有提供该 tokenType 的语言（无法在 VS Code 原生层面做到真正按语言隔离）。
 
 ## 同步（Settings Sync）
 

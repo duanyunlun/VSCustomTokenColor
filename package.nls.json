@@ -1,0 +1,6 @@
+{
+  "extension.displayName": "Token Styler",
+  "extension.description": "GUI editor for VS Code semantic token styles (MVP WIP).",
+  "command.open.title": "Token Styler: Open",
+  "command.openPreview.title": "Token Styler: Open Preview"
+}
