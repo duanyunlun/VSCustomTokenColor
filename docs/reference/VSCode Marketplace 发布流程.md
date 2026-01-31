@@ -8,7 +8,7 @@
 1) Marketplace 的扩展 ID = `publisher.name`：
    - `name`：来自 `package.json` 的 `"name"`
    - `publisher`：来自 `package.json` 的 `"publisher"`（需要与你在 Marketplace 创建的 Publisher ID 一致）
-2) 本仓库当前 `"publisher": "local"` 仅用于本地调试；发布前必须改为真实 Publisher ID。
+2) 本仓库当前 `package.json.publisher` 已设置为 `liekong1991`；发布前请确认 Marketplace 中的 Publisher ID 也是 `liekong1991`（或按实际情况调整）。
 
 ## 1. 准备账号与凭证（只做一次）
 1) 在 Visual Studio Marketplace 创建 Publisher（获取 Publisher ID）。
