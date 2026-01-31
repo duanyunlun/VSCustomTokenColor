@@ -44,11 +44,9 @@ type WebviewLanguageItem = {
   installed: boolean;
 };
 
-type EditableLayer = 'standard' | 'language';
+type EditableLayer = 'standard' | 'language' | 'textmate';
 
 type TriState = 'inherit' | 'on' | 'off';
-
-type CustomSelectorType = 'semantic' | 'textmate';
 
 type WebviewState = {
   themeName: string;
@@ -63,9 +61,6 @@ type WebviewState = {
   selectedTokenType?: string;
   selectedModifiers: string[];
   selector?: string;
-  useCustomSelector: boolean;
-  customSelectorType: CustomSelectorType;
-  customSelectorText: string;
   fontFamily: string;
   layerStyle?: TokenStyle;
   effectiveStyle?: TokenStyle;
@@ -256,9 +251,6 @@ export function activate(context: vscode.ExtensionContext): void {
       let presetsByTheme = loadPresets(context, scope);
       let selectedTokenType: string | undefined;
       let selectedModifiers: string[] = [];
-      let useCustomSelector = false;
-      let customSelectorType: CustomSelectorType = 'semantic';
-      let customSelectorText = '';
 
       let savedStandardPreset = getLanguagePreset(presetsByTheme, themeName, STANDARD_PRESET_KEY) ?? { tokenRules: {}, textMateRules: {}, fontFamily: '' };
       let draftStandardPreset = clonePreset(savedStandardPreset);
@@ -310,6 +302,12 @@ export function activate(context: vscode.ExtensionContext): void {
         semanticTokensAvailability = await probeDocumentSemanticTokensAvailability(doc);
       };
 
+      const computeTextMateScopes = (): string[] => {
+        const scopes = Object.keys(draftPreset.textMateRules ?? {});
+        const selected = selectedTokenType ? [selectedTokenType] : [];
+        return [...new Set([...selected, ...scopes])].sort();
+      };
+
       const computeLanguageTokenTypes = (): string[] => {
         const extId = selectedLanguage.recommendedExtensionId;
         if (!isExtensionInstalled(extId)) {
@@ -332,8 +330,18 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const buildState = (): WebviewState => {
         const uiLanguage = getUiLanguage();
-        const tokenTypes = layer === 'standard' ? [...LSP_STANDARD_TOKEN_TYPES] : computeLanguageTokenTypes();
-        const tokenModifiers = layer === 'standard' ? [...LSP_STANDARD_TOKEN_MODIFIERS] : computeLanguageTokenModifiers();
+        const tokenTypes =
+          layer === 'textmate'
+            ? computeTextMateScopes()
+            : layer === 'standard'
+              ? [...LSP_STANDARD_TOKEN_TYPES]
+              : computeLanguageTokenTypes();
+        const tokenModifiers =
+          layer === 'textmate'
+            ? []
+            : layer === 'standard'
+              ? [...LSP_STANDARD_TOKEN_MODIFIERS]
+              : computeLanguageTokenModifiers();
         const nextSelectedTokenType =
           selectedTokenType && tokenTypes.includes(selectedTokenType)
             ? selectedTokenType
@@ -346,25 +354,21 @@ export function activate(context: vscode.ExtensionContext): void {
         selectedTokenType = nextSelectedTokenType;
 
         selectedModifiers = selectedModifiers.filter((m) => tokenModifiers.includes(m));
-        const selectorBase = selectedTokenType ? [selectedTokenType, ...selectedModifiers].join('.') : undefined;
-        const customRaw = customSelectorText.trim();
         const selector =
-          useCustomSelector && customRaw
-            ? (customSelectorType === 'textmate' ? (customRaw.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean)[0] ?? customRaw) : customRaw)
-            : selectorBase;
+          layer === 'textmate'
+            ? selectedTokenType
+            : (selectedTokenType ? [selectedTokenType, ...selectedModifiers].join('.') : undefined);
 
-        const activeSemanticRules = layer === 'standard' ? draftStandardPreset.tokenRules : draftPreset.tokenRules;
-        const activeTextMateRules = layer === 'standard' ? draftStandardPreset.textMateRules : draftPreset.textMateRules;
         const activeRules =
-          useCustomSelector && customSelectorType === 'textmate' ? (activeTextMateRules ?? {}) : activeSemanticRules;
-        const layerStyle = selector ? (activeRules as TokenStyleRules)[selector] : undefined;
+          layer === 'textmate'
+            ? draftPreset.textMateRules
+            : layer === 'standard'
+              ? draftStandardPreset.tokenRules
+              : draftPreset.tokenRules;
+        const layerStyle = selector ? activeRules?.[selector] : undefined;
 
         const effective = selector
-          ? (
-              useCustomSelector && customSelectorType === 'textmate'
-                ? getEffectiveTextMateStyleFromSettings(themeName, selector)
-                : getEffectiveStyleFromSettings(themeName, selector)
-            )
+          ? (layer === 'textmate' ? getEffectiveTextMateStyleFromSettings(themeName, selector) : getEffectiveStyleFromSettings(themeName, selector))
           : { hasRule: false as const, style: undefined, source: undefined };
         const effectiveStyle = effective.style;
         const effectiveStyleSource: WebviewState['effectiveStyleSource'] =
@@ -375,7 +379,7 @@ export function activate(context: vscode.ExtensionContext): void {
               : 'theme';
 
         const overrideWarning =
-          (!useCustomSelector || customSelectorType !== 'textmate') && layer === 'standard' && selector
+          layer === 'standard' && selector
             ? buildOverrideWarning(presetsByTheme, themeName, selector, uiLanguage)
             : undefined;
 
@@ -395,18 +399,13 @@ export function activate(context: vscode.ExtensionContext): void {
           selectedTokenType,
           selectedModifiers,
           selector,
-          useCustomSelector,
-          customSelectorType,
-          customSelectorText,
           fontFamily: draftPreset.fontFamily ?? '',
           layerStyle,
           effectiveStyle,
           effectiveStyleSource,
           overrideWarning,
           tokenHelp: selector
-            ? (useCustomSelector && customSelectorType === 'textmate'
-                ? buildTextMateHelpText(selector, uiLanguage)
-                : buildTokenHelpText(selectedLanguage, layer, selector))
+            ? (layer === 'textmate' ? buildTextMateHelpText(selector, uiLanguage) : buildTokenHelpText(selectedLanguage, layer, selector))
             : undefined,
           semanticHighlightingEnabled,
           languageSemanticHighlighting,
@@ -698,7 +697,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (msg.type === 'setLayer') {
             const payload = msg.payload as { layer?: unknown };
-            const nextLayer: EditableLayer = payload.layer === 'standard' ? 'standard' : 'language';
+            const layerValue = payload.layer;
+            const nextLayer: EditableLayer =
+              layerValue === 'textmate'
+                ? 'textmate'
+                : layerValue === 'standard'
+                  ? 'standard'
+                  : 'language';
             if (nextLayer === layer) {
               return;
             }
@@ -772,8 +777,18 @@ export function activate(context: vscode.ExtensionContext): void {
           if (typeof payload.tokenType !== 'string' || !payload.tokenType.trim()) {
             return;
           }
-          selectedTokenType = payload.tokenType.trim();
-          selectedModifiers = [];
+          if (layer === 'textmate') {
+            // TextMate scopes：用户可能粘贴多行 scopes，这里取第一个非空 scope 作为当前选择。
+            const first = payload.tokenType
+              .split(/[,\\n\\r]+/g)
+              .map((x) => x.trim())
+              .filter(Boolean)[0];
+            selectedTokenType = first ? first : payload.tokenType.trim();
+            selectedModifiers = [];
+          } else {
+            selectedTokenType = payload.tokenType.trim();
+            selectedModifiers = [];
+          }
           await postState();
           return;
         }
@@ -787,34 +802,6 @@ export function activate(context: vscode.ExtensionContext): void {
             .filter((x): x is string => typeof x === 'string' && !!x.trim())
             .map((x) => x.trim());
           selectedModifiers = [...new Set(next)].sort();
-          await postState();
-          return;
-        }
-
-        if (msg.type === 'setCustomSelectorEnabled') {
-          const payload = msg.payload as { enabled?: unknown };
-          useCustomSelector = payload.enabled === true;
-          dirty = true;
-          scheduleApplyPreview();
-          await postState();
-          return;
-        }
-
-        if (msg.type === 'setCustomSelectorType') {
-          const payload = msg.payload as { selectorType?: unknown };
-          const t = payload.selectorType;
-          customSelectorType = t === 'textmate' ? 'textmate' : 'semantic';
-          dirty = true;
-          scheduleApplyPreview();
-          await postState();
-          return;
-        }
-
-        if (msg.type === 'setCustomSelectorText') {
-          const payload = msg.payload as { text?: unknown };
-          customSelectorText = typeof payload.text === 'string' ? payload.text : '';
-          dirty = true;
-          scheduleApplyPreview();
           await postState();
           return;
         }
@@ -837,49 +824,26 @@ export function activate(context: vscode.ExtensionContext): void {
           const selector = payload.selector.trim();
           const style = sanitizeTokenStyle(payload.style);
 
-          const targetPreset: any = layer === 'standard' ? draftStandardPreset : draftPreset;
-          const ruleKey = useCustomSelector && customSelectorText.trim() ? customSelectorText.trim() : selector;
-          const isTextMate = useCustomSelector && customSelectorType === 'textmate';
-          const currentRules: TokenStyleRules = isTextMate
-            ? { ...(targetPreset.textMateRules ?? {}) }
-            : { ...(targetPreset.tokenRules ?? {}) };
-
-          if (style) {
-            // 支持把一个输入拆成多个 TextMate scopes（逗号/换行分隔）
-            if (isTextMate) {
-              const parts = ruleKey.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean);
-              if (parts.length <= 1) {
-                currentRules[ruleKey] = style;
-              } else {
-                for (const p of parts) {
-                  currentRules[p] = style;
-                }
-              }
+          if (layer === 'textmate') {
+            const currentRules: TokenStyleRules = { ...(draftPreset.textMateRules ?? {}) };
+            if (style) {
+              currentRules[selector] = style;
             } else {
-              currentRules[ruleKey] = style;
+              delete currentRules[selector];
             }
+            draftPreset = { ...draftPreset, textMateRules: currentRules };
           } else {
-            if (isTextMate) {
-              const parts = ruleKey.split(/[,\\n\\r]+/g).map((x) => x.trim()).filter(Boolean);
-              if (parts.length <= 1) {
-                delete currentRules[ruleKey];
-              } else {
-                for (const p of parts) {
-                  delete currentRules[p];
-                }
-              }
-            } else {
-              delete currentRules[ruleKey];
-            }
-          }
+            const currentRules: TokenStyleRules =
+              layer === 'standard'
+                ? { ...(draftStandardPreset.tokenRules ?? {}) }
+                : { ...(draftPreset.tokenRules ?? {}) };
 
-          if (isTextMate) {
-            if (layer === 'standard') {
-              draftStandardPreset = { ...(draftStandardPreset as any), textMateRules: currentRules };
+            if (style) {
+              currentRules[selector] = style;
             } else {
-              draftPreset = { ...(draftPreset as any), textMateRules: currentRules };
+              delete currentRules[selector];
             }
-          } else {
+
             if (layer === 'standard') {
               draftStandardPreset = { ...draftStandardPreset, tokenRules: currentRules };
             } else {
@@ -887,7 +851,10 @@ export function activate(context: vscode.ExtensionContext): void {
             }
           }
           dirty = true;
-          if (!useCustomSelector) {
+          if (layer === 'textmate') {
+            selectedTokenType = selector;
+            selectedModifiers = [];
+          } else {
             const parts = selector.split('.').map((x) => x.trim()).filter(Boolean);
             selectedTokenType = parts[0] ?? selectedTokenType;
             selectedModifiers = parts.slice(1);
@@ -1239,7 +1206,7 @@ function buildOverrideWarning(
   return `Note: this selector is already set in language layer (${overlapped.join(', ')}), which overrides the Standard (LSP) layer; changes in Standard may not reflect in preview.`;
 }
 
-function buildTokenHelpText(language: LanguageBinding, layer: EditableLayer, selector: string): string {
+function buildTokenHelpText(language: LanguageBinding, layer: Exclude<EditableLayer, 'textmate'>, selector: string): string {
   const uiLanguage = getUiLanguage();
   const parts = selector.split('.').map((x) => x.trim()).filter(Boolean);
   const tokenType = parts[0] ?? '';
@@ -1698,10 +1665,11 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
 
       <div class="panel colTokens" id="tokenPanel">
         <div class="panelHeader">
-          <strong>Token Types</strong>
+          <strong>Tokens</strong>
           <select id="layerSelect" title="编辑层级">
-            <option value="language">语言扩展</option>
-            <option value="standard">标准（LSP）</option>
+            <option value="language">语义：语言扩展</option>
+            <option value="standard">语义：标准（LSP）</option>
+            <option value="textmate">TextMate Scopes</option>
           </select>
           <span class="muted" id="tokenCount"></span>
         </div>
@@ -1741,31 +1709,15 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
           </div>
           <div id="overrideWarning" class="danger" style="display:none; margin-top:6px; line-height:1.4"></div>
 
-          <div class="field">
-            <div>修饰符</div>
-            <div class="inline" id="modifierList"></div>
+          <div id="modifierSection">
+            <div class="field">
+              <div>修饰符</div>
+              <div class="inline" id="modifierList"></div>
+            </div>
+            <div class="muted" style="margin-top:6px; line-height:1.4" id="modifierInfo"></div>
           </div>
-          <div class="muted" style="margin-top:6px; line-height:1.4" id="modifierInfo"></div>
 
           <div class="divider"></div>
-
-          <div class="field">
-            <div>高级</div>
-            <div class="inline">
-              <label><input id="useCustomSelector" type="checkbox" /> 使用自定义 selector</label>
-              <select id="customSelectorType" title="selector 类型">
-                <option value="semantic">语义（semanticTokenColorCustomizations）</option>
-                <option value="textmate">TextMate scopes（tokenColorCustomizations）</option>
-              </select>
-            </div>
-          </div>
-          <div class="field">
-            <div>selector</div>
-            <div class="inline">
-              <input id="customSelector" type="text" placeholder="例如：function.definition 或 entity.name.function.definition.cpp" style="width:100%" />
-            </div>
-          </div>
-          <div class="muted" style="margin-top:6px; line-height:1.4" id="customSelectorHint"></div>
 
           <div class="field">
             <div>字体</div>
@@ -1796,7 +1748,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
               当前语义高亮已关闭（editor.semanticHighlighting.enabled=false），语义 Token 配色不会生效。
               <button id="btnEnableSemantic" style="margin-left:6px">启用</button>
             </div>
-            说明：可在“标准（LSP）”与“语言扩展”两层分别编辑。修改会立即作用到右侧预览（通过临时写入 settings 实现）。未点击“保存”则切换语言/关闭面板会自动恢复。注意：语义 token 配色是“按主题的全局规则”，语言层的同名 tokenType 会覆盖标准层，但仍会影响所有语言（VS Code 原生限制）。如某些高亮来自 TextMate scopes，可在“高级”中切换到 TextMate 并粘贴 scope 进行设置。
+            说明：可在“标准（LSP）”与“语言扩展”两层分别编辑。修改会立即作用到右侧预览（通过临时写入 settings 实现）。未点击“保存”则切换语言/关闭面板会自动恢复。注意：语义 token 配色是“按主题的全局规则”，语言层的同名 tokenType 会覆盖标准层，但仍会影响所有语言（VS Code 原生限制）。如某些高亮来自 TextMate scopes，可在 Token Types 下拉中选择“TextMate Scopes”，再输入/选择 scope 进行设置。
           </div>
         </div>
       </div>
@@ -1825,6 +1777,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
       const selectedTokenEl = document.getElementById('selectedToken');
       const tokenHelpEl = document.getElementById('tokenHelp');
       const overrideWarningEl = document.getElementById('overrideWarning');
+      const semanticSectionEl = document.getElementById('semanticSection');
       const langSemanticRowEl = document.getElementById('langSemanticRow');
       const langSemanticLabelEl = document.getElementById('langSemanticLabel');
       const langSemanticToggleEl = document.getElementById('langSemanticToggle');
@@ -1838,10 +1791,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
       const semanticAvailabilityHintEl = document.getElementById('semanticAvailabilityHint');
       const modifierListEl = document.getElementById('modifierList');
       const modifierInfoEl = document.getElementById('modifierInfo');
-      const useCustomSelectorEl = document.getElementById('useCustomSelector');
-      const customSelectorTypeEl = document.getElementById('customSelectorType');
-      const customSelectorEl = document.getElementById('customSelector');
-      const customSelectorHintEl = document.getElementById('customSelectorHint');
+      const modifierSectionEl = document.getElementById('modifierSection');
       const fontFamilyEl = document.getElementById('fontFamily');
       const fgColor = document.getElementById('fgColor');
       const fgText = document.getElementById('fgText');
@@ -1910,6 +1860,14 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
       });
 
       tokenSearch.addEventListener('input', () => renderTokenList());
+      tokenSearch.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        if (state.layer !== 'textmate') return;
+        const text = (tokenSearch.value || '').trim();
+        if (!text) return;
+        e.preventDefault();
+        vscode.postMessage({ type: 'selectTokenType', payload: { tokenType: text } });
+      });
 
       function isValidHexColor(value) {
         return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value);
@@ -1964,6 +1922,12 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         scopeSelect.value = state.scope || 'workspace';
         layerSelect.value = state.layer || 'language';
 
+        if (state.layer === 'textmate') {
+          tokenSearch.placeholder = state.uiLanguage === 'zh-cn' ? '输入/搜索 TextMate scope（回车选中）...' : 'Search/paste TextMate scope (Enter to select)...';
+        } else {
+          tokenSearch.placeholder = state.uiLanguage === 'zh-cn' ? '搜索 tokenType...' : 'Search tokenType...';
+        }
+
         if (state.uiLanguage === 'zh-cn') {
           scopeLabelEl.textContent = '范围：';
           themeLabelEl.textContent = '主题：';
@@ -1996,16 +1960,18 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
           applyTriState(editorSemanticBoxEl, editorSemanticStateTextEl, 'inherit');
         }
 
+        semanticSectionEl.style.display = state.layer === 'textmate' ? 'none' : 'block';
+
         if (state.layer === 'language' && state.semanticTokensAvailability && state.semanticTokensAvailability !== 'available' && state.semanticTokensAvailability !== 'unknown') {
           semanticAvailabilityHintEl.style.display = 'block';
           if (state.uiLanguage === 'zh-cn') {
             semanticAvailabilityHintEl.textContent =
               '提示：当前语言可能没有提供语义 Token（或数据为空），所以 editor.semanticTokenColorCustomizations 不一定会生效。这通常不是本扩展问题，而是语言服务能力/实现所致。' +
-              ' 如需给该语言配色，可能需要使用 editor.tokenColorCustomizations（TextMate scopes）。你可以在“高级”里选择 TextMate 并粘贴 scope（例如 Inspect 里看到的 entity.name.function.definition.cpp）。';
+              ' 如需给该语言配色，可能需要使用 editor.tokenColorCustomizations（TextMate scopes）。你可以在 Token Types 下拉中选择 “TextMate Scopes”，并粘贴 Inspect 里看到的 scope（例如 entity.name.function.definition.cpp）。';
           } else {
             semanticAvailabilityHintEl.textContent =
               'Note: this language may not provide semantic tokens (or returns empty data), so editor.semanticTokenColorCustomizations may not take effect. This is usually due to the language service. ' +
-              ' You may need editor.tokenColorCustomizations (TextMate scopes) for coloring. You can use Advanced → TextMate and paste a scope (e.g. entity.name.function.definition.cpp from Inspect).';
+              ' You may need editor.tokenColorCustomizations (TextMate scopes) for coloring. Select “TextMate Scopes” in the Token Types dropdown and paste a scope (e.g. entity.name.function.definition.cpp from Inspect).';
           }
         } else {
           semanticAvailabilityHintEl.style.display = 'none';
@@ -2021,12 +1987,12 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         }
 
         fontFamilyEl.value = state.fontFamily || '';
-        selectedTokenEl.textContent = state.useCustomSelector ? (state.selector || '') : (state.selectedTokenType ? state.selectedTokenType : '');
+        selectedTokenEl.textContent = state.selectedTokenType ? state.selectedTokenType : '';
         tokenHelpEl.textContent = state.tokenHelp || '';
         overrideWarningEl.textContent = state.overrideWarning || '';
         overrideWarningEl.style.display = state.overrideWarning ? 'block' : 'none';
 
-        semanticWarningEl.style.display = state.semanticHighlightingEnabled ? 'none' : 'block';
+        semanticWarningEl.style.display = state.layer === 'textmate' ? 'none' : (state.semanticHighlightingEnabled ? 'none' : 'block');
 
         const layerStyle = state.layerStyle || null;
         const effectiveStyle = state.effectiveStyle || null;
@@ -2034,27 +2000,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         // 标题右侧 tokenType 按“生效色”着色（无显式值则沿用默认前景色）
         selectedTokenEl.style.color = effectiveStyle && effectiveStyle.foreground ? effectiveStyle.foreground : '';
 
-        useCustomSelectorEl.checked = !!state.useCustomSelector;
-        customSelectorTypeEl.value = state.customSelectorType || 'semantic';
-        customSelectorEl.value = state.customSelectorText || '';
-        customSelectorTypeEl.disabled = !state.useCustomSelector;
-        customSelectorEl.disabled = !state.useCustomSelector;
-        customSelectorHintEl.style.display = state.useCustomSelector ? 'block' : 'none';
-        if (state.uiLanguage === 'zh-cn') {
-          customSelectorHintEl.textContent =
-            state.customSelectorType === 'textmate'
-              ? 'TextMate scopes 支持逗号/换行批量输入；建议从 “Developer: Inspect Editor Tokens and Scopes” 复制 scope。'
-              : '语义 selector 形如：tokenType.modifier1.modifier2（例如 function.definition）。';
-        } else {
-          customSelectorHintEl.textContent =
-            state.customSelectorType === 'textmate'
-              ? 'TextMate scopes support comma/newline batch input; copy scopes from “Developer: Inspect Editor Tokens and Scopes”.'
-              : 'Semantic selector format: tokenType.modifier1.modifier2 (e.g. function.definition).';
-        }
-
-        const isTextMateCustom = !!state.useCustomSelector && state.customSelectorType === 'textmate';
-        modifierListEl.style.opacity = isTextMateCustom ? '0.55' : '1';
-        modifierInfoEl.style.opacity = isTextMateCustom ? '0.55' : '1';
+        modifierSectionEl.style.display = state.layer === 'textmate' ? 'none' : 'block';
 
         renderModifierList();
         renderModifierInfo(effectiveStyle);
@@ -2084,7 +2030,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
                 : 'Effective: theme default';
         }
 
-        const disabled = state.useCustomSelector ? !((state.customSelectorText || '').trim()) : !state.selectedTokenType;
+        const disabled = !state.selectedTokenType;
         fgColor.disabled = disabled;
         fgText.disabled = disabled;
         boldChk.disabled = disabled;
@@ -2108,7 +2054,7 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
         modifierListEl.innerHTML = '';
         const mods = state.tokenModifiers || [];
         const selected = new Set(state.selectedModifiers || []);
-        const disableAll = !state.selectedTokenType || (state.useCustomSelector && state.customSelectorType === 'textmate');
+        const disableAll = !state.selectedTokenType || state.layer === 'textmate';
         for (const m of mods) {
           const label = document.createElement('label');
           const chk = document.createElement('input');
@@ -2134,18 +2080,6 @@ function getWebviewHtml(webview: vscode.Webview, initialState: WebviewState): st
 
       fontFamilyEl.addEventListener('input', () => {
         vscode.postMessage({ type: 'setFontFamily', payload: { fontFamily: fontFamilyEl.value } });
-      });
-
-      useCustomSelectorEl.addEventListener('change', () => {
-        vscode.postMessage({ type: 'setCustomSelectorEnabled', payload: { enabled: useCustomSelectorEl.checked } });
-      });
-
-      customSelectorTypeEl.addEventListener('change', () => {
-        vscode.postMessage({ type: 'setCustomSelectorType', payload: { selectorType: customSelectorTypeEl.value } });
-      });
-
-      customSelectorEl.addEventListener('input', () => {
-        vscode.postMessage({ type: 'setCustomSelectorText', payload: { text: customSelectorEl.value } });
       });
 
       fgColor.addEventListener('input', () => {
